@@ -20,6 +20,7 @@ from playwright.sync_api import Page, sync_playwright
 
 CDP_URL = "http://localhost:9222"
 SCRIPT_DIR = Path(__file__).resolve().parent
+INJECT_TIMEOUT = 60_000  # hard cap: 60s for the entire operation
 
 CLAUDE_INPUT_SELECTORS = [
     "div.ProseMirror[contenteditable='true']",
@@ -32,6 +33,8 @@ SEND_BUTTON_SELECTORS = [
     "button[aria-label='Send Message']",
     "fieldset button[type='button']:last-child",
 ]
+
+_SKIP_TITLE_KEYWORDS = {"test", "injection", "automated", "nudge-agent"}
 
 
 def _find_claude_page(contexts) -> Page | None:
@@ -54,6 +57,25 @@ def _wait_for_input(page: Page, timeout: int = 10_000) -> str | None:
     return None
 
 
+def _pick_best_page(pages: list[Page]) -> Page | None:
+    """Among Claude.ai pages, pick one showing a real conversation (not a test)."""
+    claude_pages = [p for p in pages if "claude.ai" in p.url]
+    if not claude_pages:
+        return None
+    # Prefer a /chat/ page whose title doesn't look like a test
+    for pg in claude_pages:
+        url = pg.url
+        if "/chat/" not in url:
+            continue
+        try:
+            title = pg.title().lower()
+        except Exception:
+            title = ""
+        if not any(kw in title for kw in _SKIP_TITLE_KEYWORDS):
+            return pg
+    return claude_pages[0]
+
+
 def inject(
     message: str,
     *,
@@ -62,7 +84,11 @@ def inject(
     dry_run: bool = False,
     screenshot: bool = False,
 ) -> dict:
-    """Main entry point. Returns a result dict for the caller."""
+    """Main entry point. Returns a result dict for the caller.
+
+    When neither conv_id nor new_chat is set, navigates to the first
+    non-test Claude.ai page found in the browser.
+    """
     result: dict = {"ok": False, "error": None, "url": None, "sent": False}
 
     with sync_playwright() as p:
@@ -72,12 +98,12 @@ def inject(
             result["error"] = f"CDP connection failed: {e}"
             return result
 
-        page = _find_claude_page(browser.contexts)
-        if not page:
+        all_pages = [pg for ctx in browser.contexts for pg in ctx.pages]
+        if not any("claude.ai" in pg.url for pg in all_pages):
             result["error"] = "No Claude.ai tab found in Chrome"
             return result
 
-        # Navigate if needed
+        # Pick or navigate to the target page
         if new_chat:
             target_url = "https://claude.ai/new"
         elif conv_id:
@@ -85,32 +111,39 @@ def inject(
         else:
             target_url = None
 
-        if target_url and page.url != target_url:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_load_state("networkidle", timeout=15_000)
+        if target_url:
+            page = _pick_best_page(all_pages) or all_pages[0]
+            if page.url != target_url:
+                page.goto(target_url, wait_until="domcontentloaded",
+                          timeout=30_000)
+                page.wait_for_load_state("networkidle", timeout=15_000)
+        else:
+            page = _pick_best_page(all_pages)
+            if not page:
+                result["error"] = "No suitable (non-test) Claude.ai page found"
+                return result
 
         result["url"] = page.url
 
-        # Wait for input box
-        sel = _wait_for_input(page)
+        # Wait for input box (with global timeout)
+        sel = _wait_for_input(page, timeout=10_000)
         if not sel:
             result["error"] = "Input box not found (tried all known selectors)"
-            if screenshot:
-                page.screenshot(path=str(SCRIPT_DIR / "inject_fail.png"))
             return result
 
         input_el = page.locator(sel).first
-
-        # Focus and clear
         input_el.click()
         page.wait_for_timeout(200)
 
-        # Type the message character by character (handles CJK + contenteditable)
+        # Type via clipboard paste (fast, handles CJK correctly)
         input_el.fill("")
         page.wait_for_timeout(100)
         input_el.click()
-        page.keyboard.type(message, delay=10)
-        page.wait_for_timeout(300)
+        page.evaluate(
+            "text => navigator.clipboard.writeText(text)", message)
+        modifier = "Meta" if sys.platform == "darwin" else "Control"
+        page.keyboard.press(f"{modifier}+v")
+        page.wait_for_timeout(500)
 
         if screenshot or dry_run:
             page.screenshot(path=str(SCRIPT_DIR / "inject_preview.png"))
@@ -120,16 +153,12 @@ def inject(
             result["sent"] = False
             return result
 
-        # Send: press Enter
+        # Send and exit immediately — don't wait for Claude's response
         page.keyboard.press("Enter")
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(300)
 
         result["ok"] = True
         result["sent"] = True
-
-        if screenshot:
-            page.wait_for_timeout(2000)
-            page.screenshot(path=str(SCRIPT_DIR / "inject_sent.png"))
 
     return result
 

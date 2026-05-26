@@ -228,7 +228,10 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
         upd = c.get("updated_at") or ""
         ago = _humanize_delta(now, upd) if upd else "时间未知"
         tag = _project_tag(c)
+        cuuid = c.get("uuid") or ""
         lines.append(f"- [{upd[:16].replace('T', ' ')}, {ago}] {tag}{title}")
+        if cuuid:
+            lines.append(f"  conv-id: {cuuid}")
         tail = c.get("_tail")
         if tail:
             lines.append("  最近内容：")

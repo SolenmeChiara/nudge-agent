@@ -386,18 +386,30 @@ def call_claude_code(prompt: str, *, continue_session: bool) -> tuple[int, str, 
 
 # ---------- Claude.ai inject ----------
 
+_SKIP_TITLE_KEYWORDS = {"test", "injection", "automated", "nudge-agent"}
+
+
 def _pick_inject_target(convs: list[dict] | None) -> str | None:
     """Choose which conversation to inject the nudge notification into.
 
-    Priority: most-recently-updated conversation whose project contains
-    "work" (case-insensitive).  Fallback: most-recently-updated overall.
-    Returns a conversation UUID or None.
+    Priority:
+      1. Most-recently-updated work! conversation (excluding test/injection chats)
+      2. Most-recently-updated non-test conversation
+    Returns a conversation UUID, or None if nothing suitable.
     """
     if not convs:
         return None
-    work_convs = [c for c in convs
-                  if "work" in (c.get("_project_name") or "").lower()]
-    pick = (work_convs or convs)[0]
+
+    def _is_test(c: dict) -> bool:
+        title = (c.get("name") or "").lower()
+        return any(kw in title for kw in _SKIP_TITLE_KEYWORDS)
+
+    real = [c for c in convs if not _is_test(c)]
+    if not real:
+        return None
+    work = [c for c in real
+            if "work" in (c.get("_project_name") or "").lower()]
+    pick = (work or real)[0]
     return pick.get("uuid")
 
 
@@ -414,15 +426,37 @@ def _try_inject_claude(nudge_text: str, convs: list[dict] | None) -> None:
         return
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    msg = (
-        f"[自动消息] Solenme 已经离开一段时间了。本条消息来告知你 nudge 已经发送成功。\n"
-        f"nudge 内容：{nudge_text}\n"
-        f"当前时间：{now_str}\n"
-        f"Solenme 可能会回来，也可能不会。如果一段时间内还是没有回来，"
-        f"会收到下一条 nudge 提醒，你也会收到类似的通知。"
-    )
-
     target = _pick_inject_target(convs)
+
+    # Build a rich context message for the in-conversation Claude
+    conv_status = ""
+    if target and convs:
+        for c in convs:
+            if c.get("uuid") == target:
+                title = (c.get("name") or "").strip()
+                tail = c.get("_tail") or []
+                if tail:
+                    last_msg = tail[-1]
+                    conv_status = (
+                        f"本对话「{title}」最后一条消息来自 {last_msg['sender']}："
+                        f" {last_msg['text'][:100]}"
+                    )
+                elif title:
+                    conv_status = f"本对话「{title}」"
+                break
+
+    parts = [
+        "[自动消息] Sol 已经离开一段时间了。nudge 已发送到手机。",
+        f"nudge 内容：{nudge_text}",
+        f"当前时间：{now_str}",
+    ]
+    if conv_status:
+        parts.append(f"对话状态：{conv_status}")
+    parts.append(
+        "Sol 可能会回来继续这个对话。届时请自然地接上之前的话题，"
+        "不需要提及这条自动消息。"
+    )
+    msg = "\n".join(parts)
     try:
         if target:
             result = inject(msg, conv_id=target)

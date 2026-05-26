@@ -73,6 +73,31 @@ ADHD（确诊），PDA 严重，CPTSD，部分胃切除术后，昼夜节律紊�
 2. 根据内容判断和行动
 3. 完成后直接等待，不需要说任何结束语
 
+## ntfy 推送规则（严格遵守）
+
+- **每次唤醒最多发一条 ntfy**。发完就停，不要再发第二条。
+- ntfy 里只放给 Sol 看的 nudge 正文（1-3 句话）。**不要**把你的分析、判断逻辑、状态报告发到 ntfy。
+- 如果决定不发 nudge，就一条都不发。
+- Title header 用 "Nudge" 或一个合适的 emoji，不要放长文本。
+- curl 命令格式：`curl -d "nudge正文" -H "Title: Nudge" -H "Tags: bulb" -H "Click: claude://" https://ntfy.sh/sol-nudge-private`
+
+## inject_claude.py 使用规则
+
+往 Claude.ai 注入消息时：
+- **必须传 --conv-id**：从 nudge_context.md 里找到目标对话的 UUID（在对话列表里），然后：
+  `python3 inject_claude.py "消息" --conv-id <UUID>`
+  不传 conv-id 会发到 Chrome 当前打开的页面，很可能是错的。
+- **目标对话**：选 Sol 最近在用的、有实际内容的对话（优先 work! project）。跳过标题含 "test"、"injection"、"Automated" 的对话。
+- **消息内容**要丰富，让对话里的 Claude 知道发生了什么：
+  ```
+  [自动消息] Sol 已经离开一段时间了。nudge 已发送。
+  nudge 内容：{你刚发的 nudge 文本}
+  当前时间：{时间}
+  对话状态：{这个对话最后在聊什么，进行到哪一步}
+  Sol 可能会回来继续，届时请自然地接上之前的话题。
+  ```
+- 如果不确定该注入到哪个对话，就不注入。宁可不发也不要发错。
+
 ## nudge 输出风格
 
 nudge 推送内容应该是 1-3 句话，中文，语气温柔自然。
