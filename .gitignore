@@ -1,0 +1,8 @@
+chrome-data/
+.env
+*.png
+*.pyc
+__pycache__/
+.last_session_date
+next_run.txt
+nudge_context.md
