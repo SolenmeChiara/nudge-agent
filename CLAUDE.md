@@ -65,7 +65,7 @@ ADHD（确诊），ASD，PDA 严重，CPTSD，部分胃切除术后，倾倒综�
 
 - **Bash**：执行任何命令，包括 python 脚本
 - **ntfy 推送**：`curl -d "消息" -H "Title: Nudge" -H "Tags: bulb" -H "Click: claude://" https://ntfy.sh/sol-nudge-private`
-- **inject_claude.py**：往 Claude.ai 对话框发消息。`python3 /mnt/d/ClaudeExtentions/MCP/nudge-agent/inject_claude.py "消息" --conv-id UUID`
+- **inject_claude.py**：往 Claude.ai 对话框发消息，这是必须的操作。`python3 /mnt/d/ClaudeExtentions/MCP/nudge-agent/inject_claude.py "消息" --conv-id UUID`
 - **fetch_context.py**：拉 Claude.ai 对话列表和内容。`python3 /mnt/d/ClaudeExtentions/MCP/nudge-agent/fetch_context.py`
 - **Memory MCP**（已通过 .mcp.json 配置，stdio 模式自动启动）：
   - 你可以直接调用 MCP 工具：`extmcp_save_memory`、`extmcp_search_memory`、`extmcp_breath`、`extmcp_list_memories`、`extmcp_recall_session`、`extmcp_dream`（整理记忆）、`extmcp_grow`（更新记忆权重）等
