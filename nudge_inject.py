@@ -19,6 +19,7 @@ Run on Windows. The tmux session runs in WSL.
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import signal
 import sqlite3
@@ -42,6 +43,7 @@ CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
 TMUX_SESSION = "nudge-agent"
 
 BREATH_HOOK_URL = "http://localhost:3456/breath-hook?limit=8"
+PHONE_STATUS_URL = "http://localhost:3456/phone-status"
 BREATH_HOOK_TIMEOUT = 3
 SQLITE_TIMEOUT = 10.0
 RECENT_LOOKBACK_HOURS = 48
@@ -219,6 +221,66 @@ def _build_memory_block(claude_convs_raw) -> str:
 
 # ---------- context assembly ----------
 
+def _fetch_phone_status() -> str | None:
+    """GET /phone-status from memory MCP. Returns a formatted block or None."""
+    req = urllib.request.Request(
+        PHONE_STATUS_URL, method="GET",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=BREATH_HOOK_TIMEOUT) as r:
+            if r.status != 200:
+                return None
+            data = json.loads(r.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            TimeoutError, ConnectionError, OSError, json.JSONDecodeError):
+        return None
+
+    if data.get("error"):
+        return None
+
+    ts = data.get("timestamp", "")
+    ago = ""
+    if ts:
+        try:
+            then = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            delta_min = (datetime.now(timezone.utc) - then).total_seconds() / 60
+            if delta_min < 60:
+                ago = f"{int(delta_min)} 分钟前"
+            elif delta_min < 1440:
+                ago = f"{delta_min/60:.1f} 小时前"
+            else:
+                ago = f"{delta_min/1440:.0f} 天前"
+        except (ValueError, TypeError):
+            pass
+
+    lines = [f"## 手机状态 (最近更新: {ago or ts})"]
+    if data.get("battery_level") is not None:
+        charging = " (充电中)" if data.get("battery_charging") else ""
+        lines.append(f"电量: {data['battery_level']}%{charging}")
+    if data.get("current_app"):
+        lines.append(f"当前 App: {data['current_app']}")
+    if data.get("screen_time_minutes") is not None:
+        h, m = divmod(data["screen_time_minutes"], 60)
+        lines.append(f"屏幕使用时间: 今天 {h}h{m:02d}m")
+    if data.get("location"):
+        lines.append(f"位置: {data['location']}")
+    if data.get("weather") or data.get("temperature") is not None:
+        wx = data.get("weather", "")
+        temp = f"{data['temperature']}°C" if data.get("temperature") is not None else ""
+        lines.append(f"天气: {' '.join(filter(None, [temp, wx]))}")
+    if data.get("steps") is not None:
+        lines.append(f"今日步数: {data['steps']}")
+    if data.get("sleep_hours") is not None:
+        lines.append(f"睡眠: {data['sleep_hours']:.1f}h")
+    if data.get("heart_rate") is not None:
+        lines.append(f"心率: {data['heart_rate']} bpm")
+    if data.get("calendar_events"):
+        lines.append(f"日程: {data['calendar_events']}")
+
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
 def build_context() -> str:
     """Assemble the full wakeup context block."""
     now = datetime.now()
@@ -235,12 +297,19 @@ def build_context() -> str:
     # Memory + nudge history
     memory_block = _build_memory_block(claude_convs)
 
+    # Phone status (best-effort)
+    phone_block = _fetch_phone_status()
+
     parts = [
         f"当前时间：{now_str}（{weekday}）",
         "",
         claude_block,
         "",
         memory_block,
+    ]
+    if phone_block:
+        parts += ["", phone_block]
+    parts += [
         "",
         "---",
         "",
