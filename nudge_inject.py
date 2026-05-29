@@ -36,20 +36,21 @@ from pathlib import Path
 # memory.db reads.  The imports below are local modules in the same directory.
 # ---------------------------------------------------------------------------
 import fetch_context
+from config import CFG
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-MEMORY_DB = Path(r"D:\ClaudeExtentions\MCP\Sol-Memory-mcp\memory.db")
+MEMORY_DB = Path(CFG.memory_db)
 CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
-TMUX_SESSION = "nudge-agent"
+TMUX_SESSION = CFG.tmux_session
 
-BREATH_HOOK_URL = "http://localhost:3456/breath-hook?limit=8"
-PHONE_STATUS_URL = "http://localhost:3456/phone-status"
-BREATH_HOOK_TIMEOUT = 3
+BREATH_HOOK_URL = CFG.breath_hook_url
+PHONE_STATUS_URL = CFG.phone_status_url
+BREATH_HOOK_TIMEOUT = CFG.breath_hook_timeout
 SQLITE_TIMEOUT = 10.0
-RECENT_LOOKBACK_HOURS = 48
-RECENT_TOP_N = 6
-HIGH_IMPORTANCE_TOP_N = 5
-PRIOR_NUDGE_TOP_N = 3
+RECENT_LOOKBACK_HOURS = CFG.recent_lookback_hours
+RECENT_TOP_N = CFG.recent_top_n
+HIGH_IMPORTANCE_TOP_N = CFG.high_importance_top_n
+PRIOR_NUDGE_TOP_N = CFG.prior_nudge_top_n
 NUDGE_LABELS_CN = ["[上次]", "[上上次]", "[上上上次]", "[更早]"]
 
 BUSY_POLL_INTERVAL = 10
@@ -74,7 +75,7 @@ def _stamp() -> str:
 
 def _wsl(*args: str, timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["wsl", "-d", "Ubuntu"] + list(args),
+        ["wsl"] + list(args),
         capture_output=True, text=True,
         encoding="utf-8", errors="replace",
         timeout=timeout,

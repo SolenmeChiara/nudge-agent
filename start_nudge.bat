@@ -1,17 +1,30 @@
 @echo off
-echo === Sol Nudge Agent - Full Startup ===
+setlocal
+
+set "AGENT_DIR=%~dp0"
+set "AGENT_DIR=%AGENT_DIR:~0,-1%"
+
+REM Convert Windows path to WSL path: D:\foo\bar -> /mnt/d/foo/bar
+set "DRIVE=%AGENT_DIR:~0,1%"
+call :LOWER %DRIVE% DRIVE_LOWER
+set "WSL_PATH=/mnt/%DRIVE_LOWER%/%AGENT_DIR:~3%"
+set "WSL_PATH=%WSL_PATH:\=/%"
+
+echo === Nudge Agent - Full Startup ===
+echo   Windows: %AGENT_DIR%
+echo   WSL:     %WSL_PATH%
 echo.
 
 echo [1/4] Starting Chrome with debug port...
-start "" "D:\ClaudeExtentions\MCP\nudge-agent\start_chrome_debug.bat"
+start "" "%AGENT_DIR%\start_chrome_debug.bat"
 timeout /t 3 /nobreak >nul
 
 echo [2/4] Starting Claude in WSL tmux...
-wsl -d Ubuntu -- bash -c "tmux has-session -t nudge-agent 2>/dev/null || tmux new-session -d -s nudge-agent -c /mnt/d/ClaudeExtentions/MCP/nudge-agent 'claude'"
+wsl -d Ubuntu -- bash -c "tmux has-session -t nudge-agent 2>/dev/null || tmux new-session -d -s nudge-agent -c '%WSL_PATH%' 'claude'"
 timeout /t 5 /nobreak >nul
 
 echo [3/4] Starting nudge injector in background...
-cd /d D:\ClaudeExtentions\MCP\nudge-agent
+cd /d "%AGENT_DIR%"
 start "" /min py nudge_inject.py
 
 echo [4/4] Attaching to Claude Code CLI...
@@ -19,3 +32,13 @@ echo.
 echo   Ctrl+B then D to detach (agent keeps running)
 echo.
 wsl -d Ubuntu -- tmux attach -t nudge-agent
+
+endlocal
+exit /b
+
+:LOWER
+set "%2=%~1"
+for %%a in (a b c d e f g h i j k l m n o p q r s t u v w x y z) do (
+    call set "%2=%%%2:%%a=%%a%%"
+)
+exit /b

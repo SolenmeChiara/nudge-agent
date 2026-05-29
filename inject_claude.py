@@ -18,8 +18,15 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
-CDP_URL = "http://localhost:9222"
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Lazy config import — inject_claude.py can also run standalone from WSL
+# where config.json may not be on the Python path.
+try:
+    from config import CFG as _CFG
+    CDP_URL = _CFG.cdp_url
+except ImportError:
+    CDP_URL = "http://localhost:9222"
 INJECT_TIMEOUT = 60_000  # hard cap: 60s for the entire operation
 
 CLAUDE_INPUT_SELECTORS = [

@@ -30,19 +30,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import fetch_context  # local module, same directory
+from config import CFG
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-MEMORY_DB = Path(r"D:\ClaudeExtentions\MCP\Sol-Memory-mcp\memory.db")
-NTFY_URL = "https://ntfy.sh/sol-nudge-private"
+MEMORY_DB = Path(CFG.memory_db)
+NTFY_URL = CFG.ntfy_url
 
-BREATH_HOOK_URL = "http://localhost:3456/breath-hook?limit=8"
-BREATH_HOOK_TIMEOUT = 3
+BREATH_HOOK_URL = CFG.breath_hook_url
+BREATH_HOOK_TIMEOUT = CFG.breath_hook_timeout
 
-MIN_NUDGE_GAP_MINUTES = 20
-RECENT_LOOKBACK_HOURS = 48
-RECENT_TOP_N = 6
-HIGH_IMPORTANCE_TOP_N = 5
-PRIOR_NUDGE_TOP_N = 3
+MIN_NUDGE_GAP_MINUTES = CFG.min_nudge_gap_minutes
+RECENT_LOOKBACK_HOURS = CFG.recent_lookback_hours
+RECENT_TOP_N = CFG.recent_top_n
+HIGH_IMPORTANCE_TOP_N = CFG.high_importance_top_n
+PRIOR_NUDGE_TOP_N = CFG.prior_nudge_top_n
 
 CC_TIMEOUT = 180
 NTFY_TIMEOUT = 15
