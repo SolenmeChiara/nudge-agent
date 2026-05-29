@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "python3",
+      "args": [
+        "/path/to/memory_mcp.py",
+        "--db",
+        "/path/to/memory.db"
+      ]
+    }
+  }
+}

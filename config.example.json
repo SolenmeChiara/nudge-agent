@@ -1,0 +1,10 @@
+{
+  "ntfy_url": "https://ntfy.sh/your-topic-here",
+  "memory_db": "D:\\path\\to\\memory.db",
+  "breath_hook_url": "http://localhost:3456/breath-hook?limit=8",
+  "phone_status_url": "http://localhost:3456/phone-status",
+  "tmux_session": "nudge-agent",
+  "cdp_url": "http://localhost:9222",
+  "claude_session_key_env": "CLAUDE_SESSION_KEY",
+  "memory_mcp_script": "/path/to/memory_mcp.py"
+}
