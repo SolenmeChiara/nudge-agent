@@ -15,12 +15,18 @@ echo   Windows: %AGENT_DIR%
 echo   WSL:     %WSL_PATH%
 echo.
 
+echo [0/4] Cleaning up old processes...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='py.exe'\" | Where-Object { $_.CommandLine -like '*nudge_inject*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+wsl -d Ubuntu -- tmux kill-session -t nudge-agent 2>NUL
+echo   Done.
+echo.
+
 echo [1/4] Starting Chrome with debug port...
 start "" "%AGENT_DIR%\start_chrome_debug.bat"
 timeout /t 3 /nobreak >nul
 
 echo [2/4] Starting Claude in WSL tmux...
-wsl -d Ubuntu -- bash -c "tmux has-session -t nudge-agent 2>/dev/null || tmux new-session -d -s nudge-agent -c '%WSL_PATH%' 'claude'"
+wsl -d Ubuntu -- tmux new-session -d -s nudge-agent -c "%WSL_PATH%" "claude"
 timeout /t 5 /nobreak >nul
 
 echo [3/4] Starting nudge injector in background...

@@ -310,6 +310,8 @@ def build_context() -> str:
     ]
     if phone_block:
         parts += ["", phone_block]
+    else:
+        parts += ["", "## 手机状态\n（本次唤醒未能获取 iPhone Shortcut 状态，可能 Memory MCP HTTP 未启动或超时）"]
     parts += [
         "",
         "---",
@@ -370,7 +372,7 @@ def calc_sleep_seconds() -> tuple[int, str]:
     hour, minute = now.hour, now.minute
     if hour >= 22 or hour < 7 or (hour == 7 and minute < 30):
         return 3 * 3600, "night"
-    return random.randint(20 * 60, 60 * 60), "day"
+    return random.randint(CFG.day_min_minutes * 60, CFG.day_max_minutes * 60), "day"
 
 
 def sleep_with_interrupt(seconds: float) -> None:

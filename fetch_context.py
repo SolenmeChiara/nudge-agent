@@ -83,6 +83,16 @@ def _pick_main_org(orgs: list) -> dict | None:
     return (chat_orgs[0] if chat_orgs else (orgs[0] if orgs else None))
 
 
+def _utc_to_local(iso: str) -> str:
+    """Convert a UTC ISO timestamp to local time string like '14:05 (本地)'."""
+    try:
+        utc_dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        local_dt = utc_dt.astimezone()
+        return local_dt.strftime("%Y-%m-%d %H:%M") + " (本地)"
+    except (ValueError, AttributeError):
+        return iso[:16].replace("T", " ")
+
+
 def _humanize_delta(now: datetime, then_iso: str) -> str:
     """Return e.g. '35 分钟前' / '2.3 小时前' / '1 天前'."""
     try:
@@ -227,9 +237,10 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
         title = (c.get("name") or "").replace("\n", " ").strip() or "(untitled)"
         upd = c.get("updated_at") or ""
         ago = _humanize_delta(now, upd) if upd else "时间未知"
+        local_ts = _utc_to_local(upd) if upd else "时间未知"
         tag = _project_tag(c)
         cuuid = c.get("uuid") or ""
-        lines.append(f"- [{upd[:16].replace('T', ' ')}, {ago}] {tag}{title}")
+        lines.append(f"- [{local_ts}, {ago}] {tag}{title}")
         if cuuid:
             lines.append(f"  conv-id: {cuuid}")
         tail = c.get("_tail")
