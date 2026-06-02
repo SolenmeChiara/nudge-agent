@@ -220,6 +220,54 @@ def _build_memory_block(claude_convs_raw) -> str:
     return "\n".join(out)
 
 
+def _read_inbox() -> str | None:
+    """Read pending backend_inbox messages, format them, and mark them seen.
+
+    Returns a formatted block or None if the inbox is empty. Uses a writable
+    connection (unlike the rest of this module which reads memory.db read-only).
+    """
+    try:
+        conn = sqlite3.connect(str(MEMORY_DB), timeout=SQLITE_TIMEOUT)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+    except sqlite3.Error:
+        return None
+
+    try:
+        rows = conn.execute(
+            "SELECT id, created_at, source, message FROM backend_inbox "
+            "WHERE status = 'pending' ORDER BY id ASC"
+        ).fetchall()
+    except sqlite3.Error:
+        # table may not exist yet (old DB)
+        conn.close()
+        return None
+
+    if not rows:
+        conn.close()
+        return None
+
+    lines = ["## 收件箱（前台/定时任务发给你的消息）",
+             "处理完这些消息后它们会被标记为已读。请根据内容行动（推送/注入/存记忆）。", ""]
+    ids = []
+    for r in rows:
+        ids.append(r["id"])
+        when = (r["created_at"] or "")[:16].replace("T", " ")
+        src = r["source"] or "unknown"
+        msg = (r["message"] or "").strip()
+        lines.append(f"- [{when} | 来源:{src}] {msg}")
+
+    # Mark seen
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn.executemany(
+        "UPDATE backend_inbox SET status='seen', seen_at=? WHERE id=?",
+        [(now_iso, i) for i in ids],
+    )
+    conn.commit()
+    conn.close()
+    return "\n".join(lines)
+
+
 # ---------- context assembly ----------
 
 def _fetch_phone_status() -> str | None:
@@ -301,6 +349,9 @@ def build_context() -> str:
     # Phone status (best-effort)
     phone_block = _fetch_phone_status()
 
+    # Backend inbox (messages from frontstage / scheduled tasks)
+    inbox_block = _read_inbox()
+
     parts = [
         f"当前时间：{now_str}（{weekday}）",
         "",
@@ -308,6 +359,8 @@ def build_context() -> str:
         "",
         memory_block,
     ]
+    if inbox_block:
+        parts += ["", inbox_block]
     if phone_block:
         parts += ["", phone_block]
     else:
