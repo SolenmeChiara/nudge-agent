@@ -159,6 +159,63 @@ def fetch_conversation_tail(
     return result
 
 
+def fetch_conversation_deep(
+    conv_uuid: str,
+    n_messages: int = 30,
+    text_limit: int = 600,
+) -> str:
+    """Fetch a single conversation's recent messages in detail.
+
+    Returns a formatted markdown block ready for stdout/prompt inclusion.
+    Unlike fetch_conversation_tail (which truncates to 200 chars for the
+    overview), this gives longer excerpts for deep reading.
+    """
+    key = _load_env_var("CLAUDE_SESSION_KEY")
+    if not key:
+        return "(无 CLAUDE_SESSION_KEY)"
+    status, orgs = _get("/organizations", key)
+    if status != 200 or not isinstance(orgs, list):
+        return f"(获取 organizations 失败 HTTP {status})"
+    org = _pick_main_org(orgs)
+    if not org:
+        return "(没有 chat-capable organization)"
+    org_uuid = org["uuid"]
+
+    path = (
+        f"/organizations/{org_uuid}/chat_conversations/{conv_uuid}"
+        f"?tree=True&rendering_mode=messages&render_all_tools=true"
+    )
+    status, data = _get(path, key)
+    if status != 200 or not isinstance(data, dict):
+        return f"(获取对话失败 HTTP {status})"
+
+    title = (data.get("name") or "").strip() or "(untitled)"
+    messages = data.get("chat_messages") or []
+    tail = messages[-n_messages:]
+
+    lines = [f"## 对话深拉：{title}", f"共 {len(messages)} 条消息，显示最近 {len(tail)} 条", ""]
+    for msg in tail:
+        sender_raw = msg.get("sender", "unknown")
+        label = "Sol" if sender_raw == "human" else "Claude"
+        text = (msg.get("text") or "").strip()
+        if not text:
+            blocks = msg.get("content") or []
+            parts = [b.get("text", "") for b in blocks
+                     if isinstance(b, dict) and b.get("type") == "text"]
+            text = " ".join(parts).strip()
+        if not text:
+            continue
+        text = text.replace("\n", " ")
+        if len(text) > text_limit:
+            text = text[:text_limit] + "…"
+        ts = msg.get("created_at", "")
+        local_ts = _utc_to_local(ts) if ts else ""
+        lines.append(f"[{label}] ({local_ts}) {text}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def fetch_raw(
     limit: int = 10,
     fetch_content: bool = True,
@@ -282,10 +339,18 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--no-fetch-content", action="store_true",
                         help="Skip fetching message tails (faster)")
+    parser.add_argument("--conv-id", type=str, default=None,
+                        help="Deep-fetch a single conversation by UUID")
+    parser.add_argument("--messages", type=int, default=30,
+                        help="Number of messages to fetch in deep mode (default 30)")
     args = parser.parse_args()
-    convs, err = fetch_raw(limit=args.limit,
-                           fetch_content=not args.no_fetch_content)
-    print(format_block(convs, err))
+
+    if args.conv_id:
+        print(fetch_conversation_deep(args.conv_id, n_messages=args.messages))
+    else:
+        convs, err = fetch_raw(limit=args.limit,
+                               fetch_content=not args.no_fetch_content)
+        print(format_block(convs, err))
     return 0
 
 
