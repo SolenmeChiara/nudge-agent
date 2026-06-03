@@ -423,8 +423,19 @@ def one_cycle() -> bool:
 def calc_sleep_seconds() -> tuple[int, str]:
     now = datetime.now()
     hour, minute = now.hour, now.minute
-    if hour >= 22 or hour < 7 or (hour == 7 and minute < 30):
-        return 3 * 3600, "night"
+    is_night = hour >= 22 or hour < 7 or (hour == 7 and minute < 30)
+    if is_night:
+        secs = 3 * 3600
+        # Don't overshoot the 07:30 day-window start — if a 3h sleep would
+        # cross into daytime, sleep only until 07:30 so the morning isn't skipped.
+        day_start = now.replace(hour=7, minute=30, second=0, microsecond=0)
+        if now.hour >= 22:
+            # before midnight → day_start is tomorrow morning
+            day_start += timedelta(days=1)
+        to_day_start = (day_start - now).total_seconds()
+        if 0 < to_day_start < secs:
+            return int(to_day_start), "night→dawn"
+        return secs, "night"
     return random.randint(CFG.day_min_minutes * 60, CFG.day_max_minutes * 60), "day"
 
 
