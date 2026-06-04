@@ -516,6 +516,14 @@ def main() -> int:
     except (ValueError, AttributeError):
         pass
 
+    # Clear stale override from a previous session on startup
+    if WAKEUP_OVERRIDE_FILE.exists():
+        print(f"[{_stamp()}] clearing stale override from previous session")
+        try:
+            WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     cycle = 0
     while not _stop:
         cycle += 1
@@ -530,9 +538,15 @@ def main() -> int:
         if args.once or _stop:
             break
 
-        # Wait for CC to finish processing before deciding sleep duration,
-        # so CC has time to write next_wakeup.txt if it wants to override.
-        wait_for_idle(max_polls=30)
+        # Wait for CC to actually start processing (it goes non-idle once it
+        # begins reading context), then wait for it to finish. This avoids the
+        # race where wait_for_idle returns instantly because CC hasn't started
+        # yet, causing us to miss a late-written override.
+        for _ in range(10):
+            if not is_cc_idle():
+                break
+            time.sleep(3)
+        wait_for_idle(max_polls=60)
 
         # Check for CC override
         override_dt = read_wakeup_override()

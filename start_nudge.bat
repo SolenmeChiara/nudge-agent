@@ -19,6 +19,7 @@ echo.
 echo [0/6] Cleaning up old processes...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='py.exe' OR Name='cloudflared.exe'\" | Where-Object { $_.CommandLine -like '*nudge_inject*' -or $_.CommandLine -like '*src.ingest*' -or $_.CommandLine -like '*tunnel*localhost:8765*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 wsl -d Ubuntu -- tmux kill-session -t nudge-agent 2>NUL
+if exist "%AGENT_DIR%\next_wakeup.txt" del "%AGENT_DIR%\next_wakeup.txt"
 echo   Done.
 echo.
 
