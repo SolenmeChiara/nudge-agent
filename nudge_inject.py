@@ -61,6 +61,7 @@ WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周�
 
 _stop = False
 _planned_next_wakeup = "(未计算)"
+_wakeup_source = "随机"  # "随机" or "你上次自定义的"
 
 
 def _sigint(signum, frame):
@@ -379,7 +380,8 @@ def build_context() -> str:
         "- 或者如果一切正常，什么都不做",
         "- 自定义下次唤醒时间（见下方说明）",
         "",
-        f"预计下次唤醒：{_planned_next_wakeup}",
+        f"本次唤醒类型：{_wakeup_source}",
+        f"预计下次唤醒：{_planned_next_wakeup}（随机）",
         "如果你想修改下次唤醒时间，把时间戳写入 next_wakeup.txt（覆盖写入，不是追加）：",
         '  echo "2026-06-03 15:30" > next_wakeup.txt',
         "格式：YYYY-MM-DD HH:MM（24小时制，本地时间）。写入后该时间仅生效一次，之后恢复随机。",
@@ -538,9 +540,13 @@ def main() -> int:
             sleep_secs = int((override_dt - datetime.now()).total_seconds())
             wake = override_dt
             mode = "cc-override"
+            _wakeup_source = "你上次自定义的"
+            print(f"[{_stamp()}] CC override accepted → "
+                  f"next wakeup at {wake:%Y-%m-%d %H:%M}")
         else:
             sleep_secs, mode = calc_sleep_seconds()
             wake = datetime.now() + timedelta(seconds=sleep_secs)
+            _wakeup_source = "随机"
 
         print(f"[{_stamp()}] sleeping {sleep_secs//60} min ({mode}) — "
               f"next cycle at {wake:%H:%M:%S}")
