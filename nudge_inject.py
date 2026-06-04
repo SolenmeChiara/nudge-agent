@@ -462,7 +462,7 @@ def read_wakeup_override() -> datetime | None:
     if not WAKEUP_OVERRIDE_FILE.exists():
         return None
     try:
-        raw = WAKEUP_OVERRIDE_FILE.read_text(encoding="utf-8").strip()
+        raw = WAKEUP_OVERRIDE_FILE.read_text(encoding="utf-8-sig").strip()
         WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
         if not raw:
             return None
