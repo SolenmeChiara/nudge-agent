@@ -41,6 +41,7 @@ from config import CFG
 SCRIPT_DIR = Path(__file__).resolve().parent
 MEMORY_DB = Path(CFG.memory_db)
 CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
+WAKEUP_OVERRIDE_FILE = SCRIPT_DIR / "next_wakeup.txt"
 TMUX_SESSION = CFG.tmux_session
 
 BREATH_HOOK_URL = CFG.breath_hook_url
@@ -59,6 +60,7 @@ BUSY_POLL_MAX = 60
 WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 _stop = False
+_planned_next_wakeup = "(未计算)"
 
 
 def _sigint(signum, frame):
@@ -375,6 +377,13 @@ def build_context() -> str:
         "- 整理或写入记忆（查看 session 后觉得有值得记住的就整理一下）",
         "- 拉取某个对话的完整内容深入了解",
         "- 或者如果一切正常，什么都不做",
+        "- 自定义下次唤醒时间（见下方说明）",
+        "",
+        f"预计下次唤醒：{_planned_next_wakeup}",
+        "如果你想修改下次唤醒时间，把时间戳写入 next_wakeup.txt（覆盖写入，不是追加）：",
+        '  echo "2026-06-03 15:30" > next_wakeup.txt',
+        "格式：YYYY-MM-DD HH:MM（24小时制，本地时间）。写入后该时间仅生效一次，之后恢复随机。",
+        "注意：自定义期间你无法被唤醒——如果你设了 2 小时后，这段时间内你完全处于睡眠状态，无法监督 Sol 或发送任何提醒。",
         "",
         "完成所有行动后，直接等待下一次输入即可。",
     ]
@@ -385,12 +394,18 @@ def build_context() -> str:
 
 def one_cycle() -> bool:
     """Run one wakeup cycle. Returns True if injection succeeded."""
+    global _planned_next_wakeup
     print(f"[{_stamp()}] === wakeup cycle start ===")
 
     if not tmux_session_alive():
         print(f"[{_stamp()}] tmux session '{TMUX_SESSION}' not found!",
               file=sys.stderr)
         return False
+
+    # Pre-calculate the tentative next wakeup so build_context can show it
+    sleep_secs, _ = calc_sleep_seconds()
+    tentative_wake = datetime.now() + timedelta(seconds=sleep_secs)
+    _planned_next_wakeup = tentative_wake.strftime("%Y-%m-%d %H:%M")
 
     # Build context and write to file
     print(f"[{_stamp()}] building context...")
@@ -426,17 +441,48 @@ def calc_sleep_seconds() -> tuple[int, str]:
     is_night = hour >= 22 or hour < 7 or (hour == 7 and minute < 30)
     if is_night:
         secs = 3 * 3600
-        # Don't overshoot the 07:30 day-window start — if a 3h sleep would
-        # cross into daytime, sleep only until 07:30 so the morning isn't skipped.
         day_start = now.replace(hour=7, minute=30, second=0, microsecond=0)
         if now.hour >= 22:
-            # before midnight → day_start is tomorrow morning
             day_start += timedelta(days=1)
         to_day_start = (day_start - now).total_seconds()
         if 0 < to_day_start < secs:
             return int(to_day_start), "night→dawn"
         return secs, "night"
     return random.randint(CFG.day_min_minutes * 60, CFG.day_max_minutes * 60), "day"
+
+
+def read_wakeup_override() -> datetime | None:
+    """Read and consume the CC-written override file.
+
+    Returns a future datetime if valid, None otherwise. The file is always
+    deleted after reading (one-shot).
+    """
+    if not WAKEUP_OVERRIDE_FILE.exists():
+        return None
+    try:
+        raw = WAKEUP_OVERRIDE_FILE.read_text(encoding="utf-8").strip()
+        WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
+        if not raw:
+            return None
+        # Accept YYYY-MM-DD HH:MM or YYYY.MM.DD HH:MM
+        raw = raw.replace(".", "-")
+        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+        now = datetime.now()
+        if dt <= now:
+            print(f"[{_stamp()}] override {raw} is in the past, ignoring")
+            return None
+        secs = (dt - now).total_seconds()
+        if secs < 60:
+            print(f"[{_stamp()}] override {raw} is less than 1 minute away, ignoring")
+            return None
+        return dt
+    except (ValueError, OSError) as e:
+        print(f"[{_stamp()}] override file invalid: {e}", file=sys.stderr)
+        try:
+            WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
 
 
 def sleep_with_interrupt(seconds: float) -> None:
@@ -482,8 +528,20 @@ def main() -> int:
         if args.once or _stop:
             break
 
-        sleep_secs, mode = calc_sleep_seconds()
-        wake = datetime.now() + timedelta(seconds=sleep_secs)
+        # Wait for CC to finish processing before deciding sleep duration,
+        # so CC has time to write next_wakeup.txt if it wants to override.
+        wait_for_idle(max_polls=30)
+
+        # Check for CC override
+        override_dt = read_wakeup_override()
+        if override_dt:
+            sleep_secs = int((override_dt - datetime.now()).total_seconds())
+            wake = override_dt
+            mode = "cc-override"
+        else:
+            sleep_secs, mode = calc_sleep_seconds()
+            wake = datetime.now() + timedelta(seconds=sleep_secs)
+
         print(f"[{_stamp()}] sleeping {sleep_secs//60} min ({mode}) — "
               f"next cycle at {wake:%H:%M:%S}")
         sleep_with_interrupt(sleep_secs)
