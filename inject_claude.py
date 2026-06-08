@@ -123,7 +123,10 @@ def inject(
             if page.url != target_url:
                 page.goto(target_url, wait_until="domcontentloaded",
                           timeout=30_000)
-                page.wait_for_load_state("networkidle", timeout=15_000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15_000)
+                except Exception:
+                    pass  # Claude.ai websockets prevent networkidle
         else:
             page = _pick_best_page(all_pages)
             if not page:
