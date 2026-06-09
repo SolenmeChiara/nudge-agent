@@ -6,6 +6,7 @@ __pycache__/
 .last_session_date
 next_run.txt
 next_wakeup.txt
+nudge_inject.log
 nudge_context.md
 config.json
 CLAUDE.md

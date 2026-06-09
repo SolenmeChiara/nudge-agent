@@ -57,6 +57,10 @@ NUDGE_LABELS_CN = ["[上次]", "[上上次]", "[上上上次]", "[更早]"]
 BUSY_POLL_INTERVAL = 10
 BUSY_POLL_MAX = 60
 
+# While sleeping between cycles, peek this often for a freshly-written override
+# file (CC/Sol may decide the committed wake time is wrong mid-sleep).
+OVERRIDE_RECHECK_INTERVAL = 30
+
 WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 _stop = False
@@ -106,13 +110,23 @@ def tmux_send(text: str) -> bool:
 
 
 def is_cc_idle() -> bool:
-    """Heuristic: CC is idle when any of the last few visible lines contains
-    the interactive prompt character. Claude Code uses '❯' (U+276F) and
-    renders a status bar + separator below it, so the prompt is typically
-    2-3 lines above the bottom of the pane.
+    """CC is idle when the input prompt box is shown AND it is not actively
+    processing.
+
+    IMPORTANT: Claude Code keeps the '❯' (U+276F) input box visible even
+    while a turn is running, so "prompt char present" alone is NOT a reliable
+    idle signal — it is almost always present. The canonical busy marker is
+    the spinner line that carries 'esc to interrupt'. So: busy if that marker
+    is on screen; otherwise idle if a prompt box is present.
+
+    The old prompt-only heuristic made wait_for_idle return ~immediately,
+    which caused the override file (written near the END of a 60s+ turn) to be
+    read before it existed, silently falling back to the random schedule.
     """
     tail = tmux_capture_tail(8)
     if not tail:
+        return False
+    if "esc to interrupt" in tail:
         return False
     for line in tail.splitlines():
         stripped = line.strip()
@@ -346,8 +360,18 @@ def build_context() -> str:
         claude_convs, err = None, f"{type(e).__name__}: {e}"
     claude_block = fetch_context.format_block(claude_convs, err)
 
-    # Memory + nudge history
-    memory_block = _build_memory_block(claude_convs)
+    # Memory + nudge history — degrade gracefully if memory.db is unreachable
+    # so the wakeup still fires (and CC can see the failure and act on it per
+    # CLAUDE.md's "异常情况" rule) instead of the whole cycle crashing silently.
+    try:
+        memory_block = _build_memory_block(claude_convs)
+    except Exception as e:
+        memory_block = (
+            "## 记忆上下文\n"
+            f"（读取 memory.db 失败：{type(e).__name__}: {e}）\n"
+            "**Memory MCP 可能挂了——按 CLAUDE.md「异常情况」处理，"
+            "考虑 nudge 告知 Sol 并持续提醒直到恢复。**"
+        )
 
     # Phone status (best-effort)
     phone_block = _fetch_phone_status()
@@ -428,7 +452,7 @@ def calc_sleep_seconds() -> tuple[int, str]:
     hour, minute = now.hour, now.minute
     is_night = hour >= 22 or hour < 7 or (hour == 7 and minute < 30)
     if is_night:
-        secs = 3 * 3600
+        secs = CFG.night_hours * 3600
         day_start = now.replace(hour=7, minute=30, second=0, microsecond=0)
         if now.hour >= 22:
             day_start += timedelta(days=1)
@@ -474,12 +498,35 @@ def read_wakeup_override() -> datetime | None:
 
 
 def sleep_with_interrupt(seconds: float) -> None:
+    """Sleep until the target time, but periodically peek for a NEW override.
+
+    When the injector commits to a sleep it has already consumed (deleted) the
+    override file. If CC — or Sol, by talking to the tmux session directly —
+    decides the committed wake time is wrong and writes a fresh next_wakeup.txt
+    mid-sleep, we pick it up here (within OVERRIDE_RECHECK_INTERVAL seconds) and
+    re-target the wake on the fly. Without this, the new file would sit unread
+    until the current sleep expired, so a "1 hour is too long, wake me in 20
+    min" correction couldn't shorten a sleep already underway.
+    """
+    global _wakeup_source, _planned_next_wakeup
     end = time.monotonic() + seconds
+    last_check = time.monotonic()
     while not _stop:
         remaining = end - time.monotonic()
         if remaining <= 0:
             return
         time.sleep(min(1.0, remaining))
+        now_mono = time.monotonic()
+        if now_mono - last_check >= OVERRIDE_RECHECK_INTERVAL:
+            last_check = now_mono
+            new_dt = read_wakeup_override()
+            if new_dt:
+                new_secs = max(0.0, (new_dt - datetime.now()).total_seconds())
+                end = time.monotonic() + new_secs
+                _wakeup_source = "你上次自定义的"
+                _planned_next_wakeup = new_dt.strftime("%Y-%m-%d %H:%M")
+                print(f"[{_stamp()}] mid-sleep override → re-targeting wake to "
+                      f"{new_dt:%Y-%m-%d %H:%M} ({int(new_secs)//60} min from now)")
 
 
 # ---------- main ----------
@@ -490,11 +537,44 @@ def main() -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+    # Tee stdout/stderr to a log file. The injector usually runs in a
+    # minimized console whose output is never seen — without this, override
+    # decisions ("accepted" / "in the past, ignoring") leave no record on disk.
+    class _Tee:
+        def __init__(self, *streams):
+            self._streams = streams
+
+        def write(self, s):
+            for st in self._streams:
+                try:
+                    st.write(s)
+                    st.flush()
+                except Exception:
+                    pass
+
+        def flush(self):
+            for st in self._streams:
+                try:
+                    st.flush()
+                except Exception:
+                    pass
+
+    try:
+        _logf = open(SCRIPT_DIR / "nudge_inject.log", "a", encoding="utf-8")
+        _logf.write(f"\n===== injector started {_stamp()} =====\n")
+        _logf.flush()
+        sys.stdout = _Tee(sys.stdout, _logf)
+        sys.stderr = _Tee(sys.stderr, _logf)
+    except OSError:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Periodic wakeup injector for tmux-hosted nudge agent")
     parser.add_argument("--once", action="store_true",
                         help="Inject once and exit")
     args = parser.parse_args()
+
+    global _wakeup_source
 
     signal.signal(signal.SIGINT, _sigint)
     try:

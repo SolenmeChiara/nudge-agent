@@ -27,7 +27,6 @@ try:
     CDP_URL = _CFG.cdp_url
 except ImportError:
     CDP_URL = "http://localhost:9222"
-INJECT_TIMEOUT = 60_000  # hard cap: 60s for the entire operation
 
 CLAUDE_INPUT_SELECTORS = [
     "div.ProseMirror[contenteditable='true']",
@@ -81,6 +80,14 @@ def _pick_best_page(pages: list[Page]) -> Page | None:
         if not any(kw in title for kw in _SKIP_TITLE_KEYWORDS):
             return pg
     return claude_pages[0]
+
+
+def _input_has_text(loc) -> bool:
+    """True if the contenteditable input currently holds non-whitespace text."""
+    try:
+        return bool((loc.inner_text() or "").strip())
+    except Exception:
+        return False
 
 
 def inject(
@@ -155,12 +162,26 @@ def inject(
         page.keyboard.press(f"{modifier}+v")
         page.wait_for_timeout(500)
 
+        # Clipboard writes can be silently blocked (permissions/focus), which
+        # would send an empty message while still reporting success. Verify the
+        # paste landed; if not, fall back to typing the text directly.
+        if not _input_has_text(input_el):
+            try:
+                input_el.fill(message)
+                page.wait_for_timeout(200)
+            except Exception:
+                pass
+
         if screenshot or dry_run:
             page.screenshot(path=str(SCRIPT_DIR / "inject_preview.png"))
 
         if dry_run:
             result["ok"] = True
             result["sent"] = False
+            return result
+
+        if not _input_has_text(input_el):
+            result["error"] = "input box empty after paste + fill fallback (clipboard blocked?)"
             return result
 
         # Send and exit immediately — don't wait for Claude's response

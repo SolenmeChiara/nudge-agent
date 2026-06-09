@@ -75,6 +75,13 @@ def _get(path: str, session_key: str) -> tuple[int, object]:
             return r.status, json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        # Connection refused / DNS / timeout / reset. Callers treat status 0 as
+        # failure. Without this a transient blip on a "best-effort" tail fetch
+        # would raise straight through fetch_raw and lose the whole conv list.
+        return 0, f"connection error: {e}"
+    except json.JSONDecodeError as e:
+        return 0, f"bad json: {e}"
 
 
 def _pick_main_org(orgs: list) -> dict | None:

@@ -1,5 +1,13 @@
 """Claude Code-driven nudge orchestrator.
 
+DEPRECATED — kept for reference / fallback only. The live system runs
+nudge_inject.py (a persistent tmux Claude Code instance); this single-shot
+`claude -p` orchestrator is no longer wired into start_nudge.bat. Heads-up
+before reactivating: _pick_inject_target reads `_project_name`, a key that
+fetch_raw never sets (project info lives under the `project` dict), so its
+work!-conversation preference has always silently fallen through to "newest".
+Fix that first.
+
 Each cycle:
   1. Pull Claude.ai recent activity via fetch_context.fetch()
   2. Pull recent + high-importance memories and prior nudges from memory.db
