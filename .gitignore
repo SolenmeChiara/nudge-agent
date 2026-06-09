@@ -12,3 +12,7 @@ config.json
 CLAUDE.md
 .mcp.json
 .claude/
+
+# Codex (OpenAI CLI agent) scratch — unrelated to this project
+.codex/
+AGENTS.md
