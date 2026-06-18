@@ -13,6 +13,10 @@ CLAUDE.md
 .mcp.json
 .claude/
 
+# X notification monitor state
+x_notif_state.json
+x_notif_ack
+
 # Codex (OpenAI CLI agent) scratch — unrelated to this project
 .codex/
 AGENTS.md

@@ -36,6 +36,7 @@ from pathlib import Path
 # memory.db reads.  The imports below are local modules in the same directory.
 # ---------------------------------------------------------------------------
 import fetch_context
+import x_notif
 from config import CFG
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -392,6 +393,14 @@ def build_context() -> str:
         parts += ["", phone_block]
     else:
         parts += ["", "## 手机状态\n（本次唤醒未能获取 iPhone Shortcut 状态，可能 Memory MCP HTTP 未启动或超时）"]
+
+    # X notifications (best-effort, requires Chrome remote debugging on 9222)
+    try:
+        x_block = x_notif.check()
+    except Exception:
+        x_block = None
+    if x_block:
+        parts += ["", x_block]
     parts += [
         "",
         "---",
