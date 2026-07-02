@@ -1,4 +1,8 @@
 chrome-data/
+browser_data/
+browser_data_chrome/
+screenshots/
+audit_*.md
 .env
 *.png
 *.pyc
@@ -16,6 +20,9 @@ CLAUDE.md
 # X notification monitor state
 x_notif_state.json
 x_notif_ack
+
+# CC-written one-shot request: scheduler sends /compact next idle gap
+request_compact
 
 # Codex (OpenAI CLI agent) scratch — unrelated to this project
 .codex/

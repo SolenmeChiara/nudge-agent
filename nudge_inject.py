@@ -58,6 +58,13 @@ NUDGE_LABELS_CN = ["[上次]", "[上上次]", "[上上上次]", "[更早]"]
 BUSY_POLL_INTERVAL = 10
 BUSY_POLL_MAX = 60
 
+# Auto-/compact: the tmux CC session is persistent and its history grows
+# without bound, so between cycles (while CC is idle) we periodically send
+# /compact — it keeps a summary, unlike /clear. CC can also request one
+# early by touching request_compact when it feels its own context is long.
+COMPACT_INTERVAL_HOURS = 6
+COMPACT_REQUEST_FILE = SCRIPT_DIR / "request_compact"
+
 # While sleeping between cycles, peek this often for a freshly-written override
 # file (CC/Sol may decide the committed wake time is wrong mid-sleep).
 OVERRIDE_RECHECK_INTERVAL = 30
@@ -67,6 +74,7 @@ WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周�
 _stop = False
 _planned_next_wakeup = "(未计算)"
 _wakeup_source = "随机"  # "随机" or "你上次自定义的"
+_last_compact_mono = time.monotonic()  # injector start counts as "fresh"
 
 
 def _sigint(signum, frame):
@@ -147,6 +155,33 @@ def wait_for_idle(max_polls: int = BUSY_POLL_MAX) -> bool:
             print(f"[{_stamp()}] CC is busy, waiting...")
         time.sleep(BUSY_POLL_INTERVAL)
     return False
+
+
+def maybe_compact() -> None:
+    """Send /compact to CC when due (fixed interval, or CC touched the
+    request file). Runs between cycles only, and only while CC is idle, so an
+    in-flight turn is never interrupted. A deferred request file survives to
+    the next cycle, so nothing is lost when CC happens to be busy.
+    """
+    global _last_compact_mono
+    requested = COMPACT_REQUEST_FILE.exists()
+    elapsed_h = (time.monotonic() - _last_compact_mono) / 3600
+    if not requested and elapsed_h < COMPACT_INTERVAL_HOURS:
+        return
+    reason = "CC requested" if requested else f"{COMPACT_INTERVAL_HOURS}h interval"
+    if not is_cc_idle():
+        print(f"[{_stamp()}] compact due ({reason}) but CC not idle, deferring")
+        return
+    if not tmux_send("/compact"):
+        print(f"[{_stamp()}] /compact send failed!", file=sys.stderr)
+        return
+    print(f"[{_stamp()}] /compact sent ({reason})")
+    _last_compact_mono = time.monotonic()
+    COMPACT_REQUEST_FILE.unlink(missing_ok=True)
+    # Let compaction finish before the next sleep is computed, so a wakeup
+    # never lands mid-compact.
+    time.sleep(5)
+    wait_for_idle()
 
 
 # ---------- memory.db (read-only, same queries as nudge_cc.py) ----------
@@ -359,6 +394,11 @@ def build_context() -> str:
         claude_convs, err = fetch_context.fetch_raw(limit=10, fetch_content=True)
     except Exception as e:
         claude_convs, err = None, f"{type(e).__name__}: {e}"
+    if err:
+        # Make degraded cycles greppable — without this line the only trace
+        # of a claude.ai fetch failure is the context being suspiciously fast
+        # and small (23% of historical cycles, per the 2026-07-02 audit).
+        print(f"[{_stamp()}] claude.ai fetch DEGRADED: {err}")
     claude_block = fetch_context.format_block(claude_convs, err)
 
     # Memory + nudge history — degrade gracefully if memory.db is unreachable
@@ -622,6 +662,9 @@ def main() -> int:
                 break
             time.sleep(3)
         wait_for_idle(max_polls=60)
+
+        # Periodic history compaction, now that CC has finished its turn
+        maybe_compact()
 
         # Check for CC override
         override_dt = read_wakeup_override()
