@@ -24,6 +24,12 @@ x_notif_ack
 # CC-written one-shot request: scheduler sends /compact next idle gap
 request_compact
 
+# CC's private room (journal + project threads) — personal, stays local.
+# Ignore contents but keep the setup templates tracked.
+mind/*
+!mind/journal.template.md
+!mind/projects.template.md
+
 # Codex (OpenAI CLI agent) scratch — unrelated to this project
 .codex/
 AGENTS.md

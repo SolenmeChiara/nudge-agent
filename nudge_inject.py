@@ -43,6 +43,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MEMORY_DB = Path(CFG.memory_db)
 CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
 WAKEUP_OVERRIDE_FILE = SCRIPT_DIR / "next_wakeup.txt"
+JOURNAL_FILE = SCRIPT_DIR / "mind" / "journal.md"
+JOURNAL_TAIL_LINES = 6
 TMUX_SESSION = CFG.tmux_session
 
 BREATH_HOOK_URL = CFG.breath_hook_url
@@ -383,6 +385,31 @@ def _fetch_phone_status() -> str | None:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _read_journal_tail() -> str | None:
+    """Last few non-empty lines of CC's own bedside journal (mind/journal.md).
+
+    This is what yesterday's CC left for today's CC — personal continuity
+    that survives /compact, unlike session history. The header carries the
+    file's last-modified age so a time-blind reader knows how stale it is."""
+    try:
+        if not JOURNAL_FILE.exists():
+            return None
+        lines = [l for l in JOURNAL_FILE.read_text(encoding="utf-8").splitlines()
+                 if l.strip()]
+        tail = lines[-JOURNAL_TAIL_LINES:]
+        if not tail:
+            return None
+        mtime = datetime.fromtimestamp(JOURNAL_FILE.stat().st_mtime)
+        age_h = (datetime.now() - mtime).total_seconds() / 3600
+        age = f"{age_h/24:.1f} 天前" if age_h >= 48 else f"{age_h:.1f} 小时前"
+        header = (f"## 你的睡前笔记（mind/journal.md 尾巴 | "
+                  f"最后更新 {mtime:%Y-%m-%d %H:%M}，{age}）")
+        hint = "（睡前记得更新。一两行就好——这里只显示最后几行，写太长会被截掉。）"
+        return "\n".join([header, *tail, hint])
+    except OSError:
+        return None
+
+
 def build_context() -> str:
     """Assemble the full wakeup context block."""
     now = datetime.now()
@@ -441,12 +468,18 @@ def build_context() -> str:
         x_block = None
     if x_block:
         parts += ["", x_block]
+
+    journal_block = _read_journal_tail()
+    if journal_block:
+        parts += ["", journal_block]
+
     parts += [
         "",
         "---",
         "",
         f"本次唤醒类型：{_wakeup_source} | 预计下次唤醒：{_planned_next_wakeup}",
-        "你被唤醒了。按 CLAUDE.md 的指引行动。完成后直接等待。",
+        "你被唤醒了。先值班（按 CLAUDE.md 扫描和判断），值完班剩下的时间是你的。"
+        "睡前往 mind/journal.md 留一两行再等待。",
     ]
     return "\n".join(parts)
 
@@ -482,7 +515,8 @@ def one_cycle() -> bool:
 
     # Send the short wakeup message — CC reads the context file itself
     wakeup = (
-        "你被唤醒了。上下文已更新到 nudge_context.md，请用 Read 工具读取后自由行动。"
+        "你被唤醒了。上下文已更新到 nudge_context.md，请 Read 后先值班；"
+        "值完班是你自己的时间。"
     )
     ok = tmux_send(wakeup)
     if ok:
