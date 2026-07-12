@@ -386,6 +386,58 @@ def _fetch_phone_status() -> str | None:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+# iOS Shortcuts automations POST these event names to /phone-event.
+# Unknown names render as-is, so new automations work without touching this.
+_PHONE_EVENT_LABELS = {
+    "alarm_stopped": "闹钟停止（起床了）",
+    "sleep_focus_on": "睡眠专注开启（准备睡了）",
+    "sleep_focus_off": "睡眠专注关闭",
+    "wifi_home_join": "连上家里 Wi-Fi（到家）",
+    "wifi_home_leave": "离开家里 Wi-Fi（出门）",
+    "charging_start": "开始充电",
+    "charging_stop": "结束充电",
+    "low_battery": "电量低",
+}
+
+
+def _fetch_phone_events() -> str | None:
+    """GET /phone-event from memory MCP. Returns a timeline block or None.
+
+    An empty stream is normal (no automations fired recently) — the block
+    is simply omitted rather than rendered as an error."""
+    req = urllib.request.Request(
+        CFG.phone_event_url, method="GET",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=BREATH_HOOK_TIMEOUT) as r:
+            if r.status != 200:
+                return None
+            data = json.loads(r.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            TimeoutError, ConnectionError, OSError, json.JSONDecodeError):
+        return None
+
+    events = data.get("events") or []
+    if not events:
+        return None
+
+    lines = ["## 手机事件 (最近 48h，新的在前)"]
+    for ev in events:
+        ts = ev.get("timestamp", "")
+        try:
+            when = datetime.fromisoformat(
+                ts.replace("Z", "+00:00")
+            ).astimezone().strftime("%m-%d %H:%M")
+        except (ValueError, TypeError):
+            when = ts[:16]
+        name = ev.get("event", "?")
+        label = _PHONE_EVENT_LABELS.get(name, name)
+        detail = f"（{ev['detail']}）" if ev.get("detail") else ""
+        lines.append(f"- {when} {label}{detail}")
+    return "\n".join(lines)
+
+
 def _read_journal_tail() -> str | None:
     """Last few non-empty lines of CC's own bedside journal (mind/journal.md).
 
@@ -461,6 +513,11 @@ def build_context() -> str:
         parts += ["", phone_block]
     else:
         parts += ["", "## 手机状态\n（本次唤醒未能获取 iPhone Shortcut 状态，可能 Memory MCP HTTP 未启动或超时）"]
+
+    # Phone event stream from iOS automations (best-effort; empty -> omitted)
+    phone_events_block = _fetch_phone_events()
+    if phone_events_block:
+        parts += ["", phone_events_block]
 
     # PC presence: idle time, foreground window, Chrome tabs (best-effort)
     try:

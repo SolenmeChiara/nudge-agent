@@ -3,6 +3,7 @@
   "memory_db": "./memory.db",
   "breath_hook_url": "http://localhost:3456/breath-hook?limit=8",
   "phone_status_url": "http://localhost:3456/phone-status",
+  "phone_event_url": "http://localhost:3456/phone-event?hours=48&limit=12",
   "cdp_url": "http://localhost:9222",
   "tmux_session": "nudge-agent",
   "min_nudge_gap_minutes": 20,

@@ -193,6 +193,25 @@ Content-Type: application/json
 
 This gives the agent context like "Sol's phone is at 20% and they've been on TikTok for 2 hours" — useful for calibrating nudge tone.
 
+## Phone events (iOS Shortcuts automations)
+
+Status is a snapshot; events are points in time. iOS automations (alarm
+stopped, sleep focus on/off, home Wi-Fi join/leave, charging) can each POST
+a self-describing marker the moment they fire:
+
+```
+POST http://your-ip:3456/phone-event
+Content-Type: application/json
+
+{"event": "alarm_stopped", "detail": "optional free text"}
+```
+
+The trigger identity is hardcoded per automation — no need for a "trigger
+reason" variable, and the phone-status shortcut stays untouched. The
+injector renders the last 48h as a timeline ("07:41 alarm stopped → 09:15
+home Wi-Fi joined"), which tells the agent things no snapshot can: when you
+woke up, when you left the house, when you went to bed.
+
 ## Design philosophy
 
 This system draws from Goffman's dramaturgical theory. The Claude instance on claude.ai is the "frontstage" — responding in real-time conversation flow. This nudge agent is the "backstage" — no conversation pressure, free to look back, reflect, and organize.

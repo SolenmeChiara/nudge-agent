@@ -30,6 +30,7 @@ class Config:
     # Memory MCP HTTP endpoints (optional, used when HTTP server is running)
     breath_hook_url: str = "http://localhost:3456/breath-hook?limit=8"
     phone_status_url: str = "http://localhost:3456/phone-status"
+    phone_event_url: str = "http://localhost:3456/phone-event?hours=48&limit=12"
     breath_hook_timeout: int = 3
 
     # Chrome DevTools Protocol
