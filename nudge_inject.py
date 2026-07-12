@@ -422,20 +422,35 @@ def _fetch_phone_events() -> str | None:
     if not events:
         return None
 
-    lines = ["## 手机事件 (最近 48h，新的在前)"]
-    for ev in events:
+    def _when(ev: dict) -> str:
         ts = ev.get("timestamp", "")
         try:
-            when = datetime.fromisoformat(
+            return datetime.fromisoformat(
                 ts.replace("Z", "+00:00")
             ).astimezone().strftime("%m-%d %H:%M")
         except (ValueError, TypeError):
-            when = ts[:16]
-        name = ev.get("event", "?")
-        label = _PHONE_EVENT_LABELS.get(name, name)
+            return ts[:16]
+
+    # screen_share carries a whole screen's OCR text and may arrive often.
+    # It renders as a one-line count + teaser so the agent can decide
+    # whether to pull the full texts — attention stays opt-in.
+    shares = [ev for ev in events if ev.get("event") == "screen_share"]
+    regular = [ev for ev in events if ev.get("event") != "screen_share"]
+
+    lines = ["## 手机事件 (最近 48h，新的在前)"]
+    for ev in regular:
+        label = _PHONE_EVENT_LABELS.get(ev.get("event", "?"), ev.get("event", "?"))
         detail = f"（{ev['detail']}）" if ev.get("detail") else ""
-        lines.append(f"- {when} {label}{detail}")
-    return "\n".join(lines)
+        lines.append(f"- {_when(ev)} {label}{detail}")
+    if shares:
+        newest = shares[0]
+        teaser = (newest.get("detail") or "").replace("\n", " ")[:80]
+        lines.append(
+            f"- 屏幕分享 ×{len(shares)}（最新 {_when(newest)}:"
+            f"「{teaser}…」）想看全文: "
+            f"curl 'http://localhost:3456/phone-event?hours=48&limit=20'"
+        )
+    return "\n".join(lines) if len(lines) > 1 else None
 
 
 def _read_journal_tail() -> str | None:
