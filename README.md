@@ -159,8 +159,9 @@ Every 20-60 minutes (3h at night), the injector:
 1. Fetches your recent Claude.ai conversations (titles + last few messages)
 2. Reads recent memories and prior nudge history from the database
 3. Optionally fetches phone status (battery, current app, location) if available
-4. Writes everything to `nudge_context.md`
-5. Sends a wakeup message to the tmux Claude Code instance
+4. Probes PC presence (keyboard/mouse idle time, foreground window, Chrome tab titles via CDP)
+5. Writes everything to `nudge_context.md`
+6. Sends a wakeup message to the tmux Claude Code instance
 
 Claude Code then reads the context and **autonomously decides** what to do:
 - Send a push notification to your phone via ntfy

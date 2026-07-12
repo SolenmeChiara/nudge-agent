@@ -36,6 +36,7 @@ from pathlib import Path
 # memory.db reads.  The imports below are local modules in the same directory.
 # ---------------------------------------------------------------------------
 import fetch_context
+import pc_status
 import x_notif
 from config import CFG
 
@@ -460,6 +461,14 @@ def build_context() -> str:
         parts += ["", phone_block]
     else:
         parts += ["", "## 手机状态\n（本次唤醒未能获取 iPhone Shortcut 状态，可能 Memory MCP HTTP 未启动或超时）"]
+
+    # PC presence: idle time, foreground window, Chrome tabs (best-effort)
+    try:
+        pc_block = pc_status.check()
+    except Exception:
+        pc_block = None
+    if pc_block:
+        parts += ["", pc_block]
 
     # X notifications (best-effort, requires Chrome remote debugging on 9222)
     try:
