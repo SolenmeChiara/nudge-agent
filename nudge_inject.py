@@ -369,6 +369,8 @@ def _fetch_phone_status() -> str | None:
         lines.append(f"屏幕: {'锁定中' if data['device_locked'] else '解锁使用中'}")
     if data.get("current_app"):
         lines.append(f"当前 App: {data['current_app']}")
+    if data.get("now_playing"):
+        lines.append(f"正在听: {data['now_playing']}")
     if data.get("screen_time_minutes") is not None:
         h, m = divmod(data["screen_time_minutes"], 60)
         lines.append(f"屏幕使用时间: 今天 {h}h{m:02d}m")
@@ -438,12 +440,23 @@ def _fetch_phone_events() -> str | None:
     # screen_share carries a whole screen's OCR text and may arrive often.
     # It renders as a one-line count + teaser so the agent can decide
     # whether to pull the full texts — attention stays opt-in.
+    # poke (Sol's triple back-tap "hey, you there?") stays on the timeline,
+    # one line per tap, with a short glimpse of what was on screen.
     shares = [ev for ev in events if ev.get("event") == "screen_share"]
-    regular = [ev for ev in events if ev.get("event") != "screen_share"]
+    timeline = [ev for ev in events if ev.get("event") != "screen_share"]
 
     lines = ["## 手机事件 (最近 48h，新的在前)"]
-    for ev in regular:
-        label = _PHONE_EVENT_LABELS.get(ev.get("event", "?"), ev.get("event", "?"))
+    poked_with_screen = False
+    for ev in timeline:
+        name = ev.get("event", "?")
+        if name == "poke":
+            d = (ev.get("detail") or "").replace("\n", " ").strip()
+            teaser = d[:60] + ("…" if len(d) > 60 else "")
+            suffix = f"（当时屏幕:「{teaser}」）" if teaser else ""
+            lines.append(f"- {_when(ev)} Sol 戳了你一下📱{suffix}")
+            poked_with_screen = poked_with_screen or bool(teaser)
+            continue
+        label = _PHONE_EVENT_LABELS.get(name, name)
         detail = f"（{ev['detail']}）" if ev.get("detail") else ""
         lines.append(f"- {_when(ev)} {label}{detail}")
     if shares:
@@ -453,6 +466,10 @@ def _fetch_phone_events() -> str | None:
             f"- 屏幕分享 ×{len(shares)}（最新 {_when(newest)}:"
             f"「{teaser}…」）想看全文: "
             f"curl 'http://localhost:3456/phone-event?hours=48&limit=20'"
+        )
+    elif poked_with_screen:
+        lines.append(
+            "（poke 屏幕全文: curl 'http://localhost:3456/phone-event?hours=48&limit=20'）"
         )
     return "\n".join(lines) if len(lines) > 1 else None
 
