@@ -363,6 +363,10 @@ def _fetch_phone_status() -> str | None:
     if data.get("battery_level") is not None:
         charging = " (充电中)" if data.get("battery_charging") else ""
         lines.append(f"电量: {data['battery_level']}%{charging}")
+    if data.get("focus_mode"):
+        lines.append(f"专注模式: {data['focus_mode']}")
+    if data.get("device_locked") is not None:
+        lines.append(f"屏幕: {'锁定中' if data['device_locked'] else '解锁使用中'}")
     if data.get("current_app"):
         lines.append(f"当前 App: {data['current_app']}")
     if data.get("screen_time_minutes") is not None:
