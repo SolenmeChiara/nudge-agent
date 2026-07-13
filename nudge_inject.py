@@ -682,6 +682,62 @@ def read_wakeup_override() -> datetime | None:
         return None
 
 
+def deliver_urgent_messages() -> None:
+    """Inject pending urgent inbox messages straight into CC's chat.
+
+    The express lane: urgent rows skip the wakeup cycle entirely and land as
+    a user message via tmux within one sleep-poll interval (~30s). Only rows
+    successfully injected are marked seen — if CC is busy or tmux fails, the
+    row stays pending and is retried next poll (and, as a final fallback,
+    the regular inbox block picks it up at the next full wakeup).
+    """
+    try:
+        conn = sqlite3.connect(str(MEMORY_DB), timeout=SQLITE_TIMEOUT)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+        rows = conn.execute(
+            "SELECT id, created_at, source, message FROM backend_inbox "
+            "WHERE status = 'pending' AND priority = 'urgent' ORDER BY id ASC"
+        ).fetchall()
+    except sqlite3.Error:
+        return
+
+    if not rows:
+        conn.close()
+        return
+
+    if not is_cc_idle():
+        print(f"[{_stamp()}] urgent message(s) waiting but CC busy; will retry")
+        conn.close()
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for r in rows:
+        when = (r["created_at"] or "")[:16].replace("T", " ")
+        src = r["source"] or "unknown"
+        # tmux send-keys treats newlines as submits — flatten to one line
+        msg = " / ".join(
+            part.strip() for part in (r["message"] or "").splitlines()
+            if part.strip()
+        )
+        text = (f"[紧急插播 · 来自 {src} · {when} UTC] {msg} "
+                f"（此消息走即时通道直达，无需等唤醒周期；nudge_context.md "
+                f"未刷新，处理完不用管收件箱。）")
+        if tmux_send(text):
+            conn.execute(
+                "UPDATE backend_inbox SET status='seen', seen_at=? WHERE id=?",
+                (now_iso, r["id"]),
+            )
+            conn.commit()
+            print(f"[{_stamp()}] urgent #{r['id']} from {src} injected into CC")
+            time.sleep(2)  # let CC's input settle between messages
+        else:
+            print(f"[{_stamp()}] urgent #{r['id']} tmux send failed; stays pending",
+                  file=sys.stderr)
+            break
+    conn.close()
+
+
 def sleep_with_interrupt(seconds: float) -> None:
     """Sleep until the target time, but periodically peek for a NEW override.
 
@@ -692,6 +748,8 @@ def sleep_with_interrupt(seconds: float) -> None:
     re-target the wake on the fly. Without this, the new file would sit unread
     until the current sleep expired, so a "1 hour is too long, wake me in 20
     min" correction couldn't shorten a sleep already underway.
+
+    The same poll cadence drives the urgent-message express lane.
     """
     global _wakeup_source, _planned_next_wakeup
     end = time.monotonic() + seconds
@@ -704,6 +762,7 @@ def sleep_with_interrupt(seconds: float) -> None:
         now_mono = time.monotonic()
         if now_mono - last_check >= OVERRIDE_RECHECK_INTERVAL:
             last_check = now_mono
+            deliver_urgent_messages()
             new_dt = read_wakeup_override()
             if new_dt:
                 new_secs = max(0.0, (new_dt - datetime.now()).total_seconds())
