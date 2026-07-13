@@ -36,6 +36,15 @@ class Config:
     # Chrome DevTools Protocol
     cdp_url: str = "http://localhost:9222"
 
+    # Screen peek (agent-initiated iPhone screenshot via trigger mail).
+    # smtp_user/password/mail_to live in config.json only (gitignored).
+    peek_base_url: str = "http://localhost:3456"
+    peek_smtp_host: str = "smtp.gmail.com"
+    peek_smtp_port: int = 465
+    peek_smtp_user: str = ""
+    peek_smtp_password: str = ""
+    peek_mail_to: str = ""
+
     # tmux session name
     tmux_session: str = "nudge-agent"
 
