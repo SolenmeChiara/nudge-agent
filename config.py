@@ -44,6 +44,7 @@ class Config:
     peek_smtp_user: str = ""
     peek_smtp_password: str = ""
     peek_mail_to: str = ""
+    peek_mail_subject: str = "sol-PEEK"
 
     # tmux session name
     tmux_session: str = "nudge-agent"

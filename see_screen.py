@@ -52,11 +52,13 @@ def _latest() -> dict | None:
 
 def _send_trigger() -> None:
     msg = MIMEText(f"peek {datetime.now().isoformat()}")
-    msg["Subject"] = "PEEK"
+    msg["Subject"] = CFG.peek_mail_subject
     msg["From"] = CFG.peek_smtp_user
     msg["To"] = CFG.peek_mail_to
+    # local_hostname must be ASCII: the Windows machine name contains
+    # Chinese characters, which crashes smtplib's EHLO otherwise.
     with smtplib.SMTP_SSL(CFG.peek_smtp_host, CFG.peek_smtp_port,
-                          timeout=20) as s:
+                          local_hostname="localhost", timeout=20) as s:
         s.login(CFG.peek_smtp_user, CFG.peek_smtp_password)
         s.send_message(msg)
 
