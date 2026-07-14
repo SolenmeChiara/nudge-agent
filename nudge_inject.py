@@ -22,6 +22,7 @@ import argparse
 import json
 import random
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -811,6 +812,20 @@ def main() -> int:
         sys.stderr = _Tee(sys.stderr, _logf)
     except OSError:
         pass
+
+    # Singleton guard: bind a localhost port for the process lifetime. A second
+    # instance fails the bind and exits instead of racing this one on
+    # next_wakeup.txt and double-waking CC (2026-07-13: two injectors ran in
+    # parallel all morning after a manual start + start_nudge.bat start).
+    global _singleton_sock
+    try:
+        _singleton_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _singleton_sock.bind(("127.0.0.1", 48765))
+        _singleton_sock.listen(1)
+    except OSError:
+        print(f"[{_stamp()}] another injector instance is already running "
+              "(port 48765 in use) — exiting to avoid double wakeups")
+        return 1
 
     parser = argparse.ArgumentParser(
         description="Periodic wakeup injector for tmux-hosted nudge agent")
