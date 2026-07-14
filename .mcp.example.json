@@ -1,12 +1,25 @@
 {
   "mcpServers": {
     "memory": {
+      "type": "http",
+      "url": "http://localhost:3456/mcp"
+    },
+    "gemini-video": {
+      "type": "http",
+      "url": "http://localhost:8768/mcp/<secret>"
+    },
+    "health": {
       "command": "python3",
-      "args": [
-        "/path/to/memory_mcp.py",
-        "--db",
-        "/path/to/memory.db"
-      ]
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "/path/to/Health-data-csv-MCP/server",
+      "env": {
+        "HEALTH_DB_PATH": "data/health.db"
+      }
+    },
+    "ascii-art": {
+      "command": "python3",
+      "args": ["server.py"],
+      "cwd": "/path/to/ASCII_Arts_MCP"
     }
   }
 }

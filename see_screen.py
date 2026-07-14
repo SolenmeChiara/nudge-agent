@@ -18,6 +18,12 @@ Exit codes: 0 = path printed; 1 = config missing; 2 = timed out
 (mail sent but no screenshot came back — Sol's phone may be off,
 offline, or the automation didn't fire. Do NOT read an old file and
 pretend it's current; say so or retry later instead.)
+
+peek_mail_to must be an iCloud address: Apple Mail gets real push
+for iCloud only. Gmail is lazy-fetched, so a Gmail trigger fires
+only while Mail happens to be foreground (field-tested 2026-07-14,
+4 shots). DND does not block the automation. The trigger matches on
+the subject alone, so the body is free text — write something human.
 """
 
 from __future__ import annotations
