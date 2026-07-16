@@ -190,6 +190,13 @@ def maybe_compact() -> None:
 
 # ---------- memory.db (read-only, same queries as nudge_cc.py) ----------
 
+# Probed once (first query) and cached for the process lifetime. The server
+# adds `tier` to memories via a migration that may land after this injector is
+# already running, so tier-aware SQL must fall back to the legacy form until a
+# restart re-probes. See _memories_has_tier.
+_tier_column_present: bool | None = None
+
+
 def _open_db() -> sqlite3.Connection:
     conn = sqlite3.connect(
         f"file:{MEMORY_DB.as_posix()}?mode=ro",
@@ -197,6 +204,44 @@ def _open_db() -> sqlite3.Connection:
     )
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _memories_has_tier(conn: sqlite3.Connection) -> bool:
+    """Whether the memories table has a `tier` column (probed once, cached).
+
+    Uses PRAGMA table_info, which lists the schema and never raises for a
+    missing column — unlike referencing `tier` in a WHERE clause, which would
+    throw OperationalError. That keeps us from having to wrap real queries in a
+    blanket try/except that could mask genuine errors. The result is cached in
+    a module global; a process restart re-probes, which is exactly when the
+    server-side migration is expected to have landed.
+    """
+    global _tier_column_present
+    if _tier_column_present is None:
+        cols = {row[1] for row in
+                conn.execute("PRAGMA table_info(memories)").fetchall()}
+        _tier_column_present = "tier" in cols
+    return _tier_column_present
+
+
+def _utc_to_local_str(ts: str) -> str:
+    """Convert a UTC ISO timestamp to a local-time 'YYYY-MM-DD HH:MM' string.
+
+    memory.db stores created_at as UTC — usually with a '+00:00' offset, but
+    ancient rows are naive (no offset). A naive value is treated as UTC, then
+    converted to this machine's local zone (Sol's Toronto time). Empty or
+    unparseable input is returned unchanged. Kept self-contained (no import
+    from fetch_context) so the injector stays standalone.
+    """
+    if not ts:
+        return ts
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return ts
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def _try_breath_hook() -> str | None:
@@ -220,7 +265,7 @@ def _fmt_rows(rows) -> str:
         key = (r["key"] or "").strip().replace("\n", " ")
         content = (r["content"] or "").strip().replace("\n", " ")
         excerpt = (content[:120] + "…") if len(content) > 120 else content
-        when = (r["created_at"] or "")[:16].replace("T", " ")
+        when = _utc_to_local_str(r["created_at"] or "")
         imp = r["importance"] or 0
         cat = r["category"] or ""
         lines.append(f"- [{when}|{cat}|imp={imp:.1f}] {key}: {excerpt}")
@@ -234,20 +279,30 @@ def _build_memory_block(claude_convs_raw) -> str:
                   - timedelta(hours=RECENT_LOOKBACK_HOURS)).isoformat()
         recent = conn.execute(
             "SELECT key, content, category, importance, created_at "
-            "FROM memories WHERE created_at >= ? AND key NOT LIKE '[nudge]%' "
+            "FROM memories WHERE created_at >= ? "
+            "AND NOT (category='nudge' OR key LIKE '[nudge]%') "
             "ORDER BY created_at DESC LIMIT ?",
             (cutoff, RECENT_TOP_N),
         ).fetchall()
+        # Isolate archived/seabed memories from the fallback high-importance
+        # list — but only when the tier column exists (older DBs / pre-migration
+        # restarts have no such column, so we omit the filter there).
+        tier_filter = (
+            " AND COALESCE(tier,'') NOT IN ('archive','seabed')"
+            if _memories_has_tier(conn) else ""
+        )
         high_db = conn.execute(
             "SELECT key, content, category, importance, created_at "
             "FROM memories WHERE importance >= 0.7 AND resolved = 0 "
-            "AND key NOT LIKE '[nudge]%' "
+            "AND NOT (category='nudge' OR key LIKE '[nudge]%')"
+            f"{tier_filter} "
             "ORDER BY created_at DESC LIMIT ?",
             (HIGH_IMPORTANCE_TOP_N,),
         ).fetchall()
         nudges = conn.execute(
             "SELECT content, created_at FROM memories "
-            "WHERE key LIKE '[nudge]%' ORDER BY created_at DESC LIMIT ?",
+            "WHERE (category='nudge' OR key LIKE '[nudge]%') "
+            "ORDER BY created_at DESC LIMIT ?",
             (PRIOR_NUDGE_TOP_N,),
         ).fetchall()
 
@@ -269,7 +324,7 @@ def _build_memory_block(claude_convs_raw) -> str:
     else:
         for i, n in enumerate(nudges):
             label = NUDGE_LABELS_CN[i] if i < len(NUDGE_LABELS_CN) else "[更早]"
-            when = (n["created_at"] or "")[:16].replace("T", " ")
+            when = _utc_to_local_str(n["created_at"] or "")
             content = (n["content"] or "").strip().replace("\n", " ")
             excerpt = (content[:140] + "…") if len(content) > 140 else content
             out.append(f"{label} {when} → 「{excerpt}」")
@@ -309,7 +364,7 @@ def _read_inbox() -> str | None:
     ids = []
     for r in rows:
         ids.append(r["id"])
-        when = (r["created_at"] or "")[:16].replace("T", " ")
+        when = _utc_to_local_str(r["created_at"] or "")
         src = r["source"] or "unknown"
         msg = (r["message"] or "").strip()
         lines.append(f"- [{when} | 来源:{src}] {msg}")
@@ -714,14 +769,14 @@ def deliver_urgent_messages() -> None:
 
     now_iso = datetime.now(timezone.utc).isoformat()
     for r in rows:
-        when = (r["created_at"] or "")[:16].replace("T", " ")
+        when = _utc_to_local_str(r["created_at"] or "")
         src = r["source"] or "unknown"
         # tmux send-keys treats newlines as submits — flatten to one line
         msg = " / ".join(
             part.strip() for part in (r["message"] or "").splitlines()
             if part.strip()
         )
-        text = (f"[紧急插播 · 来自 {src} · {when} UTC] {msg} "
+        text = (f"[紧急插播 · 来自 {src} · {when}] {msg} "
                 f"（此消息走即时通道直达，无需等唤醒周期；nudge_context.md "
                 f"未刷新，处理完不用管收件箱。）")
         if tmux_send(text):
