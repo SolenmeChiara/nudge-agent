@@ -21,6 +21,12 @@ CLAUDE.md
 x_notif_state.json
 x_notif_ack
 
+# Conversation-tail incremental-render state (injector writes it each cycle)
+context_state.json
+
+# Local media staging for gemini-video MCP (uploads copied here for D:-side access)
+temp_media/
+
 # CC-written one-shot request: scheduler sends /compact next idle gap
 request_compact
 
@@ -33,3 +39,7 @@ mind/*
 # Codex (OpenAI CLI agent) scratch — unrelated to this project
 .codex/
 AGENTS.md
+
+# Sol's coursework & academic files (syllabi, homework, personal info) — private, stays local.
+school/
+CLAUDE.md.bak*

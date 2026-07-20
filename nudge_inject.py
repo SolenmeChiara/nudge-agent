@@ -563,7 +563,9 @@ def build_context() -> str:
 
     # Claude.ai conversations
     try:
-        claude_convs, err = fetch_context.fetch_raw(limit=10, fetch_content=True)
+        claude_convs, err = fetch_context.fetch_raw(
+            limit=10, fetch_content=True,
+            state_path=fetch_context.SCRIPT_DIR / "context_state.json")
     except Exception as e:
         claude_convs, err = None, f"{type(e).__name__}: {e}"
     if err:

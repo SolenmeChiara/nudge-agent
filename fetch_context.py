@@ -223,10 +223,29 @@ def fetch_conversation_deep(
     return "\n".join(lines)
 
 
+def _load_tail_state(path) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_tail_state(path, state: dict) -> None:
+    # State is an optimization only — never let it break the wakeup pipeline.
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
+
+
 def fetch_raw(
     limit: int = 10,
     fetch_content: bool = True,
     content_top_n: int = CONTENT_TOP_N,
+    state_path: str | Path | None = None,
 ) -> tuple[list[dict] | None, str | None]:
     """Pull raw conversation list. Returns (sorted_convs_top_limit, error_msg).
 
@@ -235,6 +254,14 @@ def fetch_raw(
     When *fetch_content* is True, the top *content_top_n* conversations also
     get a ``_tail`` key with the last few messages (see fetch_conversation_tail).
     On any failure: (None, error_msg) where error_msg is a short human-readable string.
+
+    *state_path* (opt-in, used by the injector) points to a JSON file mapping
+    conv uuid -> updated_at as of the last rendered context. Conversations whose
+    updated_at is unchanged since then get ``_unchanged=True`` instead of a
+    ``_tail`` — no tail HTTP request is made for them, and format_block renders
+    a one-line "无更新" marker in place of the preview. Only conversations whose
+    tail was actually shown (or carried over unchanged) are recorded, so a
+    failed tail fetch never suppresses the next cycle's preview.
     """
     key = _load_env_var("CLAUDE_SESSION_KEY")
     if not key:
@@ -256,13 +283,27 @@ def fetch_raw(
     top = convs[:limit]
 
     if fetch_content and key:
-        for i, c in enumerate(top[:content_top_n]):
+        prev_state = _load_tail_state(state_path) if state_path else {}
+        new_state: dict[str, str] = {}
+        pending: list[dict] = []
+        for c in top[:content_top_n]:
             cuuid = c.get("uuid")
-            if cuuid:
-                c["_tail"] = fetch_conversation_tail(
-                    org_uuid, cuuid, key)
-                if i < content_top_n - 1:
-                    time.sleep(TAIL_RATE_DELAY)
+            if not cuuid:
+                continue
+            upd = c.get("updated_at") or ""
+            if upd and prev_state.get(cuuid) == upd:
+                c["_unchanged"] = True
+                new_state[cuuid] = upd
+            else:
+                pending.append(c)
+        for i, c in enumerate(pending):
+            c["_tail"] = fetch_conversation_tail(org_uuid, c["uuid"], key)
+            if c["_tail"]:
+                new_state[c["uuid"]] = c.get("updated_at") or ""
+            if i < len(pending) - 1:
+                time.sleep(TAIL_RATE_DELAY)
+        if state_path:
+            _save_tail_state(state_path, new_state)
 
     return top, None
 
@@ -308,7 +349,9 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
         if cuuid:
             lines.append(f"  conv-id: {cuuid}")
         tail = c.get("_tail")
-        if tail:
+        if c.get("_unchanged"):
+            lines.append("  最近内容：（无更新，同上次 context）")
+        elif tail:
             lines.append("  最近内容：")
             for msg in tail:
                 lines.append(f"  [{msg['sender']}] {msg['text']}")
