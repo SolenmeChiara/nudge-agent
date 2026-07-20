@@ -46,6 +46,15 @@ class Config:
     peek_mail_to: str = ""
     peek_mail_subject: str = "sol-PEEK"
 
+    # SwitchBot cloud API v1.1 (Color Bulb control).
+    # token/secret live in config.json only (gitignored); device_id is
+    # auto-resolved on first run or filled once known. Empty = "not
+    # configured" -> switchbot_client degrades gracefully.
+    switchbot_token: str = ""
+    switchbot_secret: str = ""
+    switchbot_device_id: str = ""
+    switchbot_base_url: str = "https://api.switch-bot.com"
+
     # tmux session name
     tmux_session: str = "nudge-agent"
 
