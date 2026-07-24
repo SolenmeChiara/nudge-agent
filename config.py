@@ -55,6 +55,15 @@ class Config:
     switchbot_device_id: str = ""
     switchbot_base_url: str = "https://api.switch-bot.com"
 
+    # Philips Hue Bridge, local CLIP v2 API (LAN HTTPS, self-signed cert).
+    # bridge_ip/application_key live in config.json only (gitignored);
+    # both are written by hue_pair.py during button pairing. Empty =
+    # "not configured" -> hue_client degrades gracefully.
+    hue_bridge_ip: str = ""
+    hue_application_key: str = ""
+    hue_client_key: str = ""
+    hue_default_light_id: str = ""
+
     # tmux session name
     tmux_session: str = "nudge-agent"
 
