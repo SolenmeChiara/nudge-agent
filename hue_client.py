@@ -38,6 +38,8 @@ CLI (hands-on acceptance):
     python3 hue_client.py bri 60 [light_id]      # brightness percent
     python3 hue_client.py color 255 180 120 [light_id]   # RGB 0-255
     python3 hue_client.py temp 2700 [light_id]   # kelvin 2000-6500
+    python3 hue_client.py timed sunrise 15       # native long fade (min)
+    python3 hue_client.py effect candle          # decorative; "none" cancels
 """
 
 from __future__ import annotations
@@ -203,6 +205,45 @@ def blink(light_id: str | None = None) -> dict:
     return {"ok": True, "light_id": rid["light_id"], "action": "breathe"}
 
 
+TIMED_EFFECTS = ("no_effect", "sunrise", "sunset")
+
+
+def timed_effect(name: str, duration_min: float | None = None,
+                 light_id: str | None = None) -> dict:
+    """Native long-fade effects: 'sunrise' (dark -> warm bright) and
+    'sunset' (the reverse). The lamp runs the whole gradient itself —
+    one PUT replaces a hand-rolled brightness loop. 'no_effect' cancels."""
+    if name not in TIMED_EFFECTS:
+        return {"ok": False,
+                "error": f"unknown timed effect {name!r}, pick from {TIMED_EFFECTS}"}
+    rid = _resolve_light_id(light_id)
+    if not rid["ok"]:
+        return rid
+    body: dict = {"timed_effects": {"effect": name}}
+    if duration_min is not None and name != "no_effect":
+        body["timed_effects"]["duration"] = int(float(duration_min) * 60_000)
+    r = _request("PUT", f"/resource/light/{rid['light_id']}", body)
+    if not r["ok"]:
+        return r
+    return {"ok": True, "light_id": rid["light_id"], "applied": body}
+
+
+def set_effect(name: str, light_id: str | None = None) -> dict:
+    """Decorative effects (candle, cosmos, underwater, ...). The lamp
+    reports its own supported list in status; we pass the name through
+    and let the Bridge reject unknown ones. 'no_effect' cancels."""
+    rid = _resolve_light_id(light_id)
+    if not rid["ok"]:
+        return rid
+    r = _request("PUT", f"/resource/light/{rid['light_id']}",
+                 {"on": {"on": True}, "effects": {"effect": name}}
+                 if name != "no_effect" else
+                 {"effects": {"effect": "no_effect"}})
+    if not r["ok"]:
+        return r
+    return {"ok": True, "light_id": rid["light_id"], "effect": name}
+
+
 def rgb_to_xy(r: int, g: int, b: int) -> tuple:
     """sRGB 0-255 -> CIE xy (Hue wide-gamut approximation, good enough
     for mood/status lighting; per-lamp gamut clipping intentionally skipped)."""
@@ -263,6 +304,20 @@ def main(argv: list[str] | None = None) -> int:
             print("用法: temp K (2000-6500) [light_id]", file=sys.stderr)
             return 1
         _pp(set_color_temperature(int(args[0]), args[1] if len(args) > 1 else None))
+        return 0
+    if cmd == "timed":
+        if not args:
+            print("用法: timed sunrise|sunset|no_effect [分钟] [light_id]", file=sys.stderr)
+            return 1
+        dur = float(args[1]) if len(args) > 1 else None
+        _pp(timed_effect(args[0], dur, args[2] if len(args) > 2 else None))
+        return 0
+    if cmd == "effect":
+        if not args:
+            print("用法: effect candle|cosmos|...|no_effect [light_id]", file=sys.stderr)
+            return 1
+        _pp(set_effect(args[0] if args[0] != "none" else "no_effect",
+                       args[1] if len(args) > 1 else None))
         return 0
 
     print(f"未知命令: {cmd}\n{__doc__}", file=sys.stderr)
