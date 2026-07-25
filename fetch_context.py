@@ -258,10 +258,14 @@ def fetch_raw(
     *state_path* (opt-in, used by the injector) points to a JSON file mapping
     conv uuid -> updated_at as of the last rendered context. Conversations whose
     updated_at is unchanged since then get ``_unchanged=True`` instead of a
-    ``_tail`` — no tail HTTP request is made for them, and format_block renders
-    a one-line "无更新" marker in place of the preview. Only conversations whose
-    tail was actually shown (or carried over unchanged) are recorded, so a
-    failed tail fetch never suppresses the next cycle's preview.
+    ``_tail`` — no tail HTTP request is made for them, and format_block omits
+    the entry entirely (a trailing count line replaces the omitted entries).
+    Conversations beyond *content_top_n* never get a tail but are tracked the
+    same way, so an idle conversation collapses regardless of rank. Within the
+    tail window, only conversations whose tail was actually shown (or carried
+    over unchanged) are recorded, so a failed tail fetch never suppresses the
+    next cycle's preview. The injector deletes the state file on startup, which
+    makes the first cycle after a restart render the full list.
     """
     key = _load_env_var("CLAUDE_SESSION_KEY")
     if not key:
@@ -286,7 +290,7 @@ def fetch_raw(
         prev_state = _load_tail_state(state_path) if state_path else {}
         new_state: dict[str, str] = {}
         pending: list[dict] = []
-        for c in top[:content_top_n]:
+        for idx, c in enumerate(top):
             cuuid = c.get("uuid")
             if not cuuid:
                 continue
@@ -294,8 +298,13 @@ def fetch_raw(
             if upd and prev_state.get(cuuid) == upd:
                 c["_unchanged"] = True
                 new_state[cuuid] = upd
-            else:
+            elif idx < content_top_n:
                 pending.append(c)
+            else:
+                # Beyond the tail window there is nothing to fetch, but the
+                # timestamp is still recorded so an idle conversation collapses
+                # to the omitted-count line on the next cycle like the rest.
+                new_state[cuuid] = upd
         for i, c in enumerate(pending):
             c["_tail"] = fetch_conversation_tail(org_uuid, c["uuid"], key)
             if c["_tail"]:
@@ -338,7 +347,11 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
         "⚡ work! 项目的对话优先关注",
         "",
     ]
+    skipped = 0
     for c in convs:
+        if c.get("_unchanged"):
+            skipped += 1
+            continue
         title = (c.get("name") or "").replace("\n", " ").strip() or "(untitled)"
         upd = c.get("updated_at") or ""
         ago = _humanize_delta(now, upd) if upd else "时间未知"
@@ -349,12 +362,16 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
         if cuuid:
             lines.append(f"  conv-id: {cuuid}")
         tail = c.get("_tail")
-        if c.get("_unchanged"):
-            lines.append("  最近内容：（无更新，同上次 context）")
-        elif tail:
+        if tail:
             lines.append("  最近内容：")
             for msg in tail:
                 lines.append(f"  [{msg['sender']}] {msg['text']}")
+    if skipped:
+        lines += [
+            "",
+            f"（另有 {skipped} 条对话自上次 context 后无更新，已整条省略——这是正常态不是故障；"
+            "需要它们的 conv-id 时运行 fetch_context.py 现拉列表）",
+        ]
     if total_count is not None:
         lines += ["", f"(账号共 {total_count} 条对话，仅显示前 {len(convs)} 条)"]
     return "\n".join(lines)

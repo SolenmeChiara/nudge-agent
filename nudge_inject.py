@@ -884,6 +884,17 @@ def main() -> int:
               "(port 48765 in use) — exiting to avoid double wakeups")
         return 1
 
+    # The tail-state file survives restarts, so without this the first context
+    # after a restart would already be incremental. Clearing it here (after the
+    # singleton guard, so a losing second instance can't wipe the winner's
+    # state) makes cycle #1 always render the full conversation list.
+    try:
+        (SCRIPT_DIR / "context_state.json").unlink(missing_ok=True)
+        print(f"[{_stamp()}] context_state.json cleared — "
+              "cycle #1 will render the full conversation list")
+    except OSError:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Periodic wakeup injector for tmux-hosted nudge agent")
     parser.add_argument("--once", action="store_true",
