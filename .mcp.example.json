@@ -9,17 +9,12 @@
       "url": "http://localhost:8768/mcp/<secret>"
     },
     "health": {
-      "command": "python3",
-      "args": ["-m", "src.mcp_server"],
-      "cwd": "/path/to/Health-data-csv-MCP/server",
-      "env": {
-        "HEALTH_DB_PATH": "data/health.db"
-      }
+      "type": "http",
+      "url": "http://localhost:8765/mcp/<secret>/"
     },
     "ascii-art": {
-      "command": "python3",
-      "args": ["server.py"],
-      "cwd": "/path/to/ASCII_Arts_MCP"
+      "type": "http",
+      "url": "http://localhost:8767/mcp/<secret>/"
     }
   }
 }
