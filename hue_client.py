@@ -40,12 +40,14 @@ CLI (hands-on acceptance):
     python3 hue_client.py temp 2700 [light_id]   # kelvin 2000-6500
     python3 hue_client.py timed sunrise 15       # native long fade (min)
     python3 hue_client.py effect candle          # decorative; "none" cancels
+    python3 hue_client.py wink [light_id]        # slow gentle blink (night-safe)
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import time
 
 import requests
 import urllib3
@@ -205,6 +207,40 @@ def blink(light_id: str | None = None) -> dict:
     return {"ok": True, "light_id": rid["light_id"], "action": "breathe"}
 
 
+def wink(light_id: str | None = None, *, lift: float = 25.0,
+         rise_ms: int = 1200, hold_ms: int = 600, fall_ms: int = 2500) -> dict:
+    """One slow, night-safe blink: brightness floats up `lift` points,
+    holds a beat, then sinks back to where it was — inhale short, exhale
+    long. Use this instead of blink() in a dim room: the identify pulse
+    is full-power and ignores current brightness (flashbang at 18%).
+    Tuned live with Sol 2026-07-25 at 18% candlelight; +10 points was
+    invisible, +25 reads as "a blink". Blocks ~rise+hold+fall (~4.3s
+    at defaults) and verifies the light landed back on baseline."""
+    st = get_status(light_id)
+    if not st.get("ok"):
+        return st
+    light = st["light"]
+    if not light.get("on", {}).get("on"):
+        return {"ok": False, "error": "light is off — wink needs a lit lamp"}
+    base = light.get("dimming", {}).get("brightness")
+    if base is None:
+        return {"ok": False, "error": "light reports no dimming capability"}
+    peak = min(base + lift, 100.0)
+    r = set_light(light_id, brightness=peak, duration_ms=rise_ms)
+    if not r["ok"]:
+        return r
+    time.sleep((rise_ms + hold_ms) / 1000)
+    r = set_light(light_id, brightness=base, duration_ms=fall_ms)
+    if not r["ok"]:
+        return r
+    time.sleep(fall_ms / 1000 + 1.2)
+    back = get_status(light_id)
+    landed = (back["light"].get("dimming", {}).get("brightness")
+              if back.get("ok") else None)
+    return {"ok": True, "light_id": light["id"], "action": "wink",
+            "base": base, "peak": peak, "landed": landed}
+
+
 TIMED_EFFECTS = ("no_effect", "sunrise", "sunset")
 
 
@@ -285,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if cmd == "blink":
         _pp(blink(args[0] if args else None))
+        return 0
+    if cmd == "wink":
+        _pp(wink(args[0] if args else None))
         return 0
     if cmd == "bri":
         if not args:
