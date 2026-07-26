@@ -42,7 +42,9 @@ REM restart, nothing pointed at it). Cleanup in [0/5] still reaps strays.
 
 echo [3/5] Starting Claude in WSL tmux (bypassPermissions: unattended agent,
 echo        a permission prompt nobody answers would deadlock the whole night)...
-wsl -d Ubuntu -- tmux new-session -d -s nudge-agent -c "%WSL_PATH%" "claude --permission-mode bypassPermissions"
+REM bash -lc: claude lives in ~/.local/bin which only login shells put on PATH
+REM (the npm-global copy that used to cover non-login shells was removed 2026-07-25)
+wsl -d Ubuntu -- tmux new-session -d -s nudge-agent -c "%WSL_PATH%" "bash -lc 'claude --permission-mode bypassPermissions'"
 timeout /t 5 /nobreak >nul
 
 echo [4/5] Starting nudge injector in background...
