@@ -61,7 +61,15 @@ Sol 批准口径（7/28 上午，终端插话原话）：预算吞段这个，�
 
 ## 进度
 - [x] 侦察（本档案，2026-07-28 09:0x 班）
-- [ ] 实现
-- [ ] 审查
-- [ ] 提交
-- [ ] 部署验证（需 Sol：重启 memory 服务 + 注入器 → 首班全量、次班省略）
+- [x] 实现（opus 子代理，测试三层全实跑；吞段 bug 在临时库复现后修复，端到端增量省 63%）
+- [x] 审查（独立 opus，PASS_WITH_NOTES；三处修正已并入：hash 剥 weight——decay 连续漂移会
+      永久击穿折叠、48h 省略行列 key、memory 侧 _fmt flatten key。前台 extmcp_breath 仍吞段
+      属计划内取舍，已告知 Sol）
+- [x] 提交（nudge-agent 20d1b8a feat + docs；Sol-Memory-mcp 4ae0a37。
+      start_tmux_agent.bat 一行 flag 被分类器拦提交，工作树保留，待 Sol 处理）
+- [ ] 部署验证（需 Sol）：**先重启 Windows 侧 memory HTTP 服务（Sol-Memory-mcp/start_http.bat），
+      同一分钟内重启注入器**（顺序理由：注入器首班基线直接是完整 payload，不浪费一轮全量）。
+      重启后验证：①首班两个记忆段全量、无省略行，memory_state.json 生成；②次班出现省略统计行，
+      WORKING/WATCH 仍全文；③无「标题在内容空」；④连看三轮注入器日志 context built (N chars)
+      稳态应明显低于首班；⑤前台随手调一次 extmcp_breath 确认仍 3000 量级。
+      注入器 48765 单例锁：杀旧起新后 Windows 侧 netstat.exe -ano | grep 48765 确认单实例。
