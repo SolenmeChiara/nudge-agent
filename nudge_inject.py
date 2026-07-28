@@ -19,8 +19,10 @@ Run on Windows. The tmux session runs in WSL.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
+import re
 import signal
 import socket
 import sqlite3
@@ -44,6 +46,7 @@ from config import CFG
 SCRIPT_DIR = Path(__file__).resolve().parent
 MEMORY_DB = Path(CFG.memory_db)
 CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
+MEMORY_STATE_FILE = SCRIPT_DIR / "memory_state.json"
 WAKEUP_OVERRIDE_FILE = SCRIPT_DIR / "next_wakeup.txt"
 JOURNAL_FILE = SCRIPT_DIR / "mind" / "journal.md"
 JOURNAL_TAIL_LINES = 6
@@ -257,19 +260,188 @@ def _try_breath_hook() -> str | None:
         return None
 
 
-def _fmt_rows(rows) -> str:
+# ---------------------------------------------------------------------------
+# Incremental rendering of the memory sections (memory_state.json)
+#
+# /breath-hook now returns the *complete* breath (memory_mcp passes budget=0),
+# which fixed the swallowed-segment bug but means the same PINNED/CORE rows would
+# be re-read in full every single wakeup. So the two memory sections are rendered
+# like the conversation list already is: an entry whose content is byte-identical
+# to what the previous context showed is omitted, and a trailing count line says
+# how many were dropped. The state lives in memory_state.json, is deleted on
+# injector startup (cycle #1 renders everything), and every read/write is
+# best-effort — a missing or corrupt state file degrades to a full render and
+# must never break the wakeup pipeline.
+# ---------------------------------------------------------------------------
+
+# Segments that are never collapsed: WORKING is the live promise list and WATCH
+# holds the crisis observation windows. Both are short and both matter enough
+# that a stale "unchanged, omitted" line is worse than the tokens it saves.
+BREATH_ALWAYS_FULL = frozenset({"WORKING", "WATCH"})
+
+_BREATH_ID_RE = re.compile(r"^\[id:([^\]]+)\]")
+_BREATH_HEADER_RE = re.compile(r"^===\s*(.+?)\s*===$")
+# Decay weight is recomputed per request (a continuous function of age), so any
+# row scoring above ~2 changes every cycle. Hashing it would mark those rows
+# "changed" forever and defeat the collapse — strip it before digesting.
+_BREATH_WEIGHT_RE = re.compile(r"\s*\[weight:[^\]]*\]")
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _load_memory_state(path=None) -> dict:
+    """Read memory_state.json. Any problem at all → {} (full render)."""
+    path = MEMORY_STATE_FILE if path is None else path
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for section in ("breath", "recent48h"):
+        sub = data.get(section)
+        out[section] = sub if isinstance(sub, dict) else {}
+    return out
+
+
+def _save_memory_state(state: dict, path=None) -> None:
+    """State is an optimization only — never let it break the wakeup pipeline."""
+    path = MEMORY_STATE_FILE if path is None else path
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1)
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def _breath_segment_name(line: str) -> str | None:
+    """'=== WORKING (3/7) ===' → 'WORKING'; non-header lines → None."""
+    m = _BREATH_HEADER_RE.match(line.strip())
+    if not m:
+        return None
+    return m.group(1).split("(")[0].strip().split(" ")[0].upper()
+
+
+def _omitted_note(ids: list[str]) -> str:
+    """Trailing count line for a breath segment whose rows were collapsed."""
+    shown = ids[:12]
+    tail = "" if len(ids) == len(shown) else f" 等 {len(ids)} 条"
+    return (
+        f"（另有 {len(ids)} 条自上次 context 后未变，已整条省略——这是正常态不是故障；"
+        f"要全文用 extmcp_get_memory 按 id 拉：{', '.join(shown)}{tail}）"
+    )
+
+
+def render_breath_incremental(text: str, prev: dict | None) -> tuple[str, dict]:
+    """Collapse unchanged breath rows. Returns (rendered_text, new_breath_state).
+
+    `text` is the raw /breath-hook payload. `prev` maps mem_id → line hash as of
+    the last rendered context; pass None/{} for a full render. Lines carrying no
+    ``[id:mem_xxx]`` prefix (segment headers, the scent easter egg, blank lines)
+    always survive verbatim, and segments listed in BREATH_ALWAYS_FULL are never
+    collapsed. The returned state maps every id seen *this* time — including the
+    omitted ones — so a row stays collapsed until its text actually changes.
+    """
+    prev = prev if isinstance(prev, dict) else {}
+    new_state: dict[str, str] = {}
+    out: list[str] = []
+    body: list[str] = []          # lines of the segment currently being read
+    segment: str | None = None
+    omitted: list[str] = []
+    anchor = [-1]                 # index in `body` of its header / last kept row
+
+    def _flush() -> None:
+        """Close the current segment: park its note right after the last row.
+
+        Appending the note at the segment boundary instead would push it past
+        the blank separator line — and, for the final segment, past the scent
+        easter egg that memory_mcp tacks onto the end of the payload — so it
+        would read as if it belonged to whatever comes next.
+        """
+        if omitted:
+            body.insert(anchor[0] + 1, _omitted_note(omitted))
+            omitted.clear()
+        out.extend(body)
+        body.clear()
+        anchor[0] = -1
+
+    for line in (text or "").splitlines():
+        name = _breath_segment_name(line)
+        if name is not None:
+            _flush()
+            segment = name
+            anchor[0] = len(body)
+            body.append(line)
+            continue
+        m = _BREATH_ID_RE.match(line.strip())
+        if not m:
+            body.append(line)
+            continue
+        mem_id = m.group(1)
+        digest = _hash(_BREATH_WEIGHT_RE.sub("", line.strip(), count=1))
+        new_state[mem_id] = digest
+        if segment not in BREATH_ALWAYS_FULL and prev.get(mem_id) == digest:
+            omitted.append(mem_id)
+            continue
+        anchor[0] = len(body)
+        body.append(line)
+    _flush()
+
+    return "\n".join(out), new_state
+
+
+def _row_identity(r) -> tuple[str, str]:
+    """(state key, content hash) for a memory row of the recent-48h section."""
+    created = (r["created_at"] or "").strip()
+    key = (r["key"] or "").strip()
+    content = (r["content"] or "").strip()
+    return _hash(f"{created}|{key}"), _hash(content)
+
+
+def _fmt_rows(rows, prev: dict | None = None) -> tuple[str, dict]:
+    """Render memory rows in full. Returns (text, state_of_rows_seen).
+
+    Content is no longer excerpted — the whole point of the incremental pass is
+    that a memory can be shown complete once instead of clipped forever. When
+    `prev` is a dict, rows whose content hash is unchanged since that state are
+    dropped and replaced by a single trailing count line; pass None to render
+    everything (the high-importance fallback path does this).
+    """
+    state: dict[str, str] = {}
     if not rows:
-        return "  (无)"
+        return "  (无)", state
     lines = []
+    skipped_keys: list[str] = []
     for r in rows:
+        rkey, chash = _row_identity(r)
+        state[rkey] = chash
+        if prev is not None and prev.get(rkey) == chash:
+            # Keep the human-readable key so the collapsed rows stay findable
+            # even if a swallowed turn meant the full text was never read.
+            k = " ".join((r["key"] or "").split())
+            skipped_keys.append(k[:24] + "…" if len(k) > 24 else k)
+            continue
         key = (r["key"] or "").strip().replace("\n", " ")
         content = (r["content"] or "").strip().replace("\n", " ")
-        excerpt = (content[:120] + "…") if len(content) > 120 else content
         when = _utc_to_local_str(r["created_at"] or "")
         imp = r["importance"] or 0
         cat = r["category"] or ""
-        lines.append(f"- [{when}|{cat}|imp={imp:.1f}] {key}: {excerpt}")
-    return "\n".join(lines)
+        lines.append(f"- [{when}|{cat}|imp={imp:.1f}] {key}: {content}")
+    if skipped_keys:
+        shown = "、".join(skipped_keys[:8])
+        tail = " 等" if len(skipped_keys) > 8 else ""
+        lines.append(
+            f"（另有 {len(skipped_keys)} 条自上次 context 后无变化，已整条省略"
+            f"——这是正常态不是故障；被省略的：{shown}{tail}。"
+            "需要时用 extmcp_search_memory / extmcp_get_memory 拉全文）"
+        )
+    if not lines:
+        return "  (无)", state
+    return "\n".join(lines), state
 
 
 def _build_memory_block(claude_convs_raw) -> str:
@@ -306,16 +478,29 @@ def _build_memory_block(claude_convs_raw) -> str:
             (PRIOR_NUDGE_TOP_N,),
         ).fetchall()
 
+    state = _load_memory_state()
+    new_state = dict(state)
+
     out.append("## 最近 48 小时记忆（来自 memory.db）\n")
-    out.append(_fmt_rows(recent))
+    recent_text, recent_state = _fmt_rows(recent, prev=state.get("recent48h", {}))
+    new_state["recent48h"] = recent_state
+    out.append(recent_text)
 
     breath = _try_breath_hook()
     if breath:
         out.append("\n## 高权重记忆 (来自 memory MCP /breath-hook)\n")
-        out.append(breath)
+        breath_text, breath_state = render_breath_incremental(
+            breath, state.get("breath", {}))
+        # Only overwrite the breath sub-state when a breath was actually
+        # rendered — a failed hook must not wipe it and force a full re-render.
+        new_state["breath"] = breath_state
+        out.append(breath_text)
     else:
         out.append("\n## 未解决的高权重记忆 (memory.db fallback)\n")
-        out.append(_fmt_rows(high_db))
+        fallback_text, _ = _fmt_rows(high_db)
+        out.append(fallback_text)
+
+    _save_memory_state(new_state)
 
     # Prior nudges + activity-since-last
     out.append("\n## 你的近期 nudge 记录")
@@ -892,6 +1077,16 @@ def main() -> int:
         (SCRIPT_DIR / "context_state.json").unlink(missing_ok=True)
         print(f"[{_stamp()}] context_state.json cleared — "
               "cycle #1 will render the full conversation list")
+    except OSError:
+        pass
+
+    # Same reasoning for the memory sections (breath rows + recent-48h rows):
+    # cycle #1 after a restart shows them in full, later cycles collapse the
+    # untouched ones.
+    try:
+        MEMORY_STATE_FILE.unlink(missing_ok=True)
+        print(f"[{_stamp()}] memory_state.json cleared — "
+              "cycle #1 will render the full memory sections")
     except OSError:
         pass
 

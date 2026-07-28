@@ -24,6 +24,9 @@ x_notif_ack
 # Conversation-tail incremental-render state (injector writes it each cycle)
 context_state.json
 
+# Memory-section incremental-render state (breath rows + recent-48h rows)
+memory_state.json
+
 # Local media staging for gemini-video MCP (uploads copied here for D:-side access)
 temp_media/
 
