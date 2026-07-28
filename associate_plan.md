@@ -60,6 +60,24 @@ exit 0 且 stdout 纯净；工具输出（tool_result）确认不进引子。并
    影响小，记录在案
 4. （档案）hook 侧 5s 与服务端 4s 之间仅 1s 余量给 BM25+MMR+渲染；496MB 生产库实测热态
    端到端 0.4s 尚宽裕，但库继续膨胀时此余量是第一个变紧的地方
+5. ~~联想微激活（Sol 提案 2026-07-28）~~ **已完成同日（Sol 拍板「现在做」，Sol-Memory-mcp
+   b29dd4d，opus 子代理施工+主循环核 diff）**：分层计价落地——seabed/archive 被联想输出记
+   `ASSOCIATE_SEABED_TOUCH=0.02`（activation_count 是 REAL 列，浮点直加；50 次联想=一次
+   search 的定价；24h 冷却限流+`^0.3` 自限），活跃层保持零计费；**不刷 last_active**（衰减
+   时钟照跑——化石上记数不是复活）；0 值=零语句安全阀；best-effort 不碰联想主流程。
+   侦察关键发现：search 排序只用 vector+keyword **不读 activation/decay**——「联想→激活→
+   更容易被联想」的自举回路结构上不存在，原零计费的噪声担忧对选取路径不成立。
+   已知边界：activation 只以 0.3 次幂进 decay，海床追平普通层物理不可达——这笔账的真实
+   价值是证据留在 DB 列里供未来捞珠脚本读取。**待部署：下次 memory 服务重启生效。**
+6. **【高优先核实】BM25 归一化疑似反向（子代理 2026-07-28 顺带发现，未改动）**：fts5 的
+   `bm25()` 返回负值且越负越好，`search()` 现行 `keyword_score = 1.0 - |bm25|/max|bm25|`
+   （memory_mcp.py:1697 附近）会把**最强**关键词命中映射成 0.0、最弱映射成近 1.0；叠加
+   `SEARCH_ABS_FLOOR=0.15` 与 keyword_weight=0.3，**纯关键词场景（无 embedding，即 ollama
+   冷启动退化时）强命中可能被阈值剪掉**——若属实，与 follow-up #2 的冷启动降档叠加成双重
+   打击，可能就是「冷启动命中率低」的另一半病根。下次施工首位核实。
+7. （低）`extmcp_get_memory` 的 item dict 加 `activation_count` 字段——微激活现在记了账
+   但没有任何工具能读出来（各工具输出只有 decay_score，且 4 月海床批次的 decay 数月后
+   round 成 0.0000）。一行改动，下次顺路。
 
 ## 进度
 
