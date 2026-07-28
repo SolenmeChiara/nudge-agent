@@ -57,14 +57,12 @@ exit 0 且 stdout 纯净；工具输出（tool_result）确认不进引子。并
 - [x] 实现（opus 子代理，四轮规格追加全落地；limit 两层修正后 40 次采样分布验证）
 - [x] 审查（PASS_WITH_NOTES；警示注释已补、遗留测试服务器已清、生产全程未碰）
 - [x] 提交
-- [ ] 部署（需 Sol，与 breath 批同一趟）：
-  1. 备份 memory.db（亲眼验证落地）
-  2. 重启 memory HTTP 服务（Sol-Memory-mcp/start_http.bat）
-  3. 重启注入器（breath 批需要）+ 重启本 CC（hook 要重启才加载；顺序反了不炸，hook 打空端点静默）
-- [ ] 部署后验证：
-  - `curl -i 'http://localhost:3456/associate?q=测试'` → 204（默认关，这本身就是回执）
-  - `curl -i 'http://localhost:3456/associate'` → 400
-  - CC 里 `extmcp_associate_config` 出现在工具列表，无参调用返回 {enabled:false, max_items:3}
-  - claude.ai / kelivo 侧看不到该工具，其余 14 个一个不少
-  - /breath-hook 与注入器链路照常
-  - 开启方式（后台自主）：`extmcp_associate_config(enabled=true)`；想安静就 false 拨回
+- [x] 部署（Sol 2026-07-28 ~10:53 一趟三重启：memory 服务 10:53:45 起、注入器 10:54:08 起、CC 新 session）
+- [x] 部署后验证（10:54 班实测）：
+  - `?q=测试` → 204（默认关回执）✓；无参 → 400 ✓
+  - `extmcp_associate_config` 在 CC 工具列表，无参返回 {enabled:false, max_items:3} ✓
+  - hook 已接进 nudge-agent/.claude/settings.local.json 的 UserPromptSubmit ✓
+  - /breath-hook 与注入器链路照常（首班全量 21489 chars）✓
+  - claude.ai / kelivo 侧不可见：未直接验证，依赖审查过的 clientInfo 门（从 CC 二进制查证过）
+- [x] 已开启：`enabled=true`（10:57 班拨的），实测 `/associate?q=窗帘…` 200 出货，
+      第一竿钓出 mem_20260427…9108（四月 seabed·卧室光影），相关性极高

@@ -67,9 +67,14 @@ Sol 批准口径（7/28 上午，终端插话原话）：预算吞段这个，�
       属计划内取舍，已告知 Sol）
 - [x] 提交（nudge-agent 20d1b8a feat + docs；Sol-Memory-mcp 4ae0a37。
       start_tmux_agent.bat 一行 flag 被分类器拦提交，工作树保留，待 Sol 处理）
-- [ ] 部署验证（需 Sol）：**先重启 Windows 侧 memory HTTP 服务（Sol-Memory-mcp/start_http.bat），
-      同一分钟内重启注入器**（顺序理由：注入器首班基线直接是完整 payload，不浪费一轮全量）。
-      重启后验证：①首班两个记忆段全量、无省略行，memory_state.json 生成；②次班出现省略统计行，
-      WORKING/WATCH 仍全文；③无「标题在内容空」；④连看三轮注入器日志 context built (N chars)
-      稳态应明显低于首班；⑤前台随手调一次 extmcp_breath 确认仍 3000 量级。
-      注入器 48765 单例锁：杀旧起新后 Windows 侧 netstat.exe -ano | grep 48765 确认单实例。
+- [x] 部署（Sol 2026-07-28 执行：memory 服务 10:53:45 起 → 注入器 10:54:08 起，顺序正确同一分钟内）
+- [x] 部署验证 10:54 班完成 ①③⑤ + 单例锁：
+      ①首班 cycle #1 两 state 清空、全量渲染 21489 chars、memory_state.json 10:54 生成 ✓
+      ③记忆段无「标题在内容空」✓
+      ⑤extmcp_breath 直调 3000 量级正常（WATCH/TOP 空是 6h 激活冷却——注入器刚呼吸过，非吞段）✓
+      48765 单实例（PID 7376）✓
+- [x] 余项 11:35 班验收：②次班省略统计行全部出现（48h 段整条省略带 key 索引、PINNED/CORE
+      折叠成 id 行、TOP 尾部统计行），WORKING/WATCH 仍全文，无空段 ✓
+      ④稳态 11710 chars vs 首班 21489（-45%），机制生效 ✓。**部署验收全部关账。**
+      另待 Sol：start_tmux_agent.bat 那行 flag 仍是未提交的 M 状态。
+      follow-up 两条（embedding timeout / 冷启动记档）排下周额度。
