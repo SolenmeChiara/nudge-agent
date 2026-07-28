@@ -45,12 +45,21 @@ exit 0 且 stdout 纯净；工具输出（tool_result）确认不进引子。并
 旧库升级实测自动建表。ruff 无新问题种类。
 
 **Follow-up（不卡本次，下周额度可做）**：
-1. `_call_ollama_embedding` 加可选 timeout，associate 路径传 4s——防 ollama 卡死时服务端
-   线程攒三分钟（现默认 180s）
+1. ~~`_call_ollama_embedding` 加可选 timeout，associate 路径传 4s~~ **已完成 2026-07-28
+   （Sol-Memory-mcp 4855972，opus 子代理施工+主循环核 diff）**：keyword-only `timeout` 参数
+   与 `_call_ollama` 既有 leash 模式对称；`ASSOCIATE_EMBED_TIMEOUT=4`（环境变量可覆盖，
+   但 .env 写入无效——常量在模块导入时冻结，`_load_dotenv` 在 main() 才跑，与其他
+   ASSOCIATE_* 常量同款坑）。黑洞监听器实测：associate 4.007s 挂断 vs 对照组
+   search 20.024s 吃全局预算，双向验证。**待部署：memory 服务重启后生效，不急，
+   攒下次重启窗口。**
 2. 已知现象记档：ollama 冷启动首次 embed 可能超 hook 5s 超时→该次联想静默丢失。长空闲后
-   实际命中率低于 15% 是正常态，不是故障
+   实际命中率低于 15% 是正常态，不是故障。**2026-07-28 获量化确认**：模型未驻留时首次
+   embed 实测 6.3s+，associate 在 4s 挂断退化纯 BM25（by design 的快速失败）。若嫌降档
+   频繁，可让注入器每次唤醒前 keep-alive 一次 embed 模型——留作观察后再决定。
 3. （低）`_associate_hook_wired` 只判脚本文件存在，不判 settings 里 hooks 块——比规格措辞弱，
    影响小，记录在案
+4. （档案）hook 侧 5s 与服务端 4s 之间仅 1s 余量给 BM25+MMR+渲染；496MB 生产库实测热态
+   端到端 0.4s 尚宽裕，但库继续膨胀时此余量是第一个变紧的地方
 
 ## 进度
 
