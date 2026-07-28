@@ -19,7 +19,7 @@ echo Killing existing session (if any)...
 wsl tmux kill-session -t nudge-agent 2>NUL
 
 echo Starting nudge-agent in WSL tmux...
-wsl -d Ubuntu tmux new-session -d -s nudge-agent "bash -lc 'cd %WSL_PATH% && claude'"
+wsl -d Ubuntu tmux new-session -d -s nudge-agent "bash -lc 'cd %WSL_PATH% && claude --permission-mode bypassPermissions'"
 
 echo.
 echo  nudge-agent started in tmux session 'nudge-agent'
