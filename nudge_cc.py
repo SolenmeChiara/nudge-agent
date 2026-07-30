@@ -61,7 +61,14 @@ NUDGE_LABELS_CN = ["[上次]", "[上上次]", "[上上上次]", "[更早]"]
 
 # Tracks the local date (YYYY-MM-DD) of the last cycle so we can decide
 # whether to resume the prior `claude -p` session or start fresh at midnight.
-LAST_SESSION_DATE_FILE = SCRIPT_DIR / ".last_session_date"
+# Runtime state lives under logs/states/ (see nudge_inject.py); git doesn't
+# track empty directories, so create it before the first write.
+STATE_DIR = SCRIPT_DIR / "logs" / "states"
+try:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
+LAST_SESSION_DATE_FILE = STATE_DIR / ".last_session_date"
 
 _stop = False
 

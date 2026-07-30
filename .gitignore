@@ -10,7 +10,6 @@ __pycache__/
 .last_session_date
 next_run.txt
 next_wakeup.txt
-nudge_inject.log
 nudge_context.md
 nudge_context_lite.md
 config.json
@@ -18,15 +17,20 @@ CLAUDE.md
 .mcp.json
 .claude/
 
-# X notification monitor state
-x_notif_state.json
+# Runtime droppings, all machine-local:
+#   logs/logs/   — nudge_inject.log (injector stdout/stderr tee)
+#   logs/states/ — incremental-render state (conversation tail, memory
+#                  sections) plus the X notification counter
+logs/
+
+# Transitional: the pre-move injector still holds an append handle on the old
+# root-level log, so the file survives until the next restart. Drop this line
+# once the leftover root copy is gone.
+nudge_inject.log
+
+# CC-touched signal telling the monitor its X notifications were handled.
+# Lives in the project root on purpose — the docs tell CC to touch it there.
 x_notif_ack
-
-# Conversation-tail incremental-render state (injector writes it each cycle)
-context_state.json
-
-# Memory-section incremental-render state (breath rows + recent-48h rows)
-memory_state.json
 
 # Local media staging for gemini-video MCP (uploads copied here for D:-side access)
 temp_media/

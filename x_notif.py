@@ -23,7 +23,15 @@ from pathlib import Path
 from config import CFG
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-STATE_FILE = SCRIPT_DIR / "x_notif_state.json"
+# Runtime state lives under logs/states/ (see nudge_inject.py); git doesn't
+# track empty directories, so create it before the first write.
+STATE_DIR = SCRIPT_DIR / "logs" / "states"
+try:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
+STATE_FILE = STATE_DIR / "x_notif_state.json"
+# Stays in the project root on purpose: the agent is told to `touch` it there.
 ACK_FILE = SCRIPT_DIR / "x_notif_ack"
 THRESHOLD = 5
 

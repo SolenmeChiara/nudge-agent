@@ -45,6 +45,19 @@ import x_notif
 from config import CFG
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+# Runtime droppings live under logs/ instead of littering the project root:
+# logs/logs/ holds the append-only injector log, logs/states/ the
+# incremental-render state files. git doesn't track empty directories, so a
+# fresh clone has neither — create them here rather than letting the first
+# write die on ENOENT.
+LOG_DIR = SCRIPT_DIR / "logs" / "logs"
+STATE_DIR = SCRIPT_DIR / "logs" / "states"
+for _runtime_dir in (LOG_DIR, STATE_DIR):
+    try:
+        _runtime_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+LOG_FILE = LOG_DIR / "nudge_inject.log"
 MEMORY_DB = Path(CFG.memory_db)
 CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
 # Fast-changing half of the same snapshot: same wakeup, same data, minus the
@@ -52,7 +65,8 @@ CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
 # CC reads this on ordinary wakeups and falls back to CONTEXT_FILE after a
 # /compact or whenever the light version leaves it guessing.
 LITE_FILE = SCRIPT_DIR / "nudge_context_lite.md"
-MEMORY_STATE_FILE = SCRIPT_DIR / "memory_state.json"
+MEMORY_STATE_FILE = STATE_DIR / "memory_state.json"
+CONTEXT_STATE_FILE = STATE_DIR / "context_state.json"
 WAKEUP_OVERRIDE_FILE = SCRIPT_DIR / "next_wakeup.txt"
 JOURNAL_FILE = SCRIPT_DIR / "mind" / "journal.md"
 JOURNAL_TAIL_LINES = 6
@@ -831,7 +845,7 @@ def build_contexts() -> tuple[str, str]:
     try:
         claude_convs, err = fetch_context.fetch_raw(
             limit=10, fetch_content=True,
-            state_path=fetch_context.SCRIPT_DIR / "context_state.json")
+            state_path=CONTEXT_STATE_FILE)
     except Exception as e:
         claude_convs, err = None, f"{type(e).__name__}: {e}"
     if err:
@@ -1158,7 +1172,7 @@ def main() -> int:
                     pass
 
     try:
-        _logf = open(SCRIPT_DIR / "nudge_inject.log", "a", encoding="utf-8")
+        _logf = open(LOG_FILE, "a", encoding="utf-8")
         _logf.write(f"\n===== injector started {_stamp()} =====\n")
         _logf.flush()
         sys.stdout = _Tee(sys.stdout, _logf)
@@ -1185,7 +1199,7 @@ def main() -> int:
     # singleton guard, so a losing second instance can't wipe the winner's
     # state) makes cycle #1 always render the full conversation list.
     try:
-        (SCRIPT_DIR / "context_state.json").unlink(missing_ok=True)
+        CONTEXT_STATE_FILE.unlink(missing_ok=True)
         print(f"[{_stamp()}] context_state.json cleared — "
               "cycle #1 will render the full conversation list")
     except OSError:
