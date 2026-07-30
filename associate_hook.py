@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook — 联想浮现 (associative surfacing).
+"""UserPromptSubmit hook — 消息时间戳 + 联想浮现 (timestamp + associative surfacing).
 
-Every user message (scheduled wake-up or a live interjection alike) rolls a
-die. On a hit, the tail of this session's transcript becomes a seed, the memory
-server retrieves a stray old memory for it, and the line is appended to the
-context via `hookSpecificOutput.additionalContext` — silently, with no tool
-call and no visible injection. It simply sits in the conversation until the
-next compact, the way a thought does.
+Every user message gets a timestamp line (Toronto time), so CC can tell at a
+glance whether a conversation is live — two adjacent stamps close together
+means Sol is actively chatting and the wakeup routine can stay out of the way.
+
+On top of that, every message rolls a die. On a hit, the tail of this
+session's transcript becomes a seed, the memory server retrieves a stray old
+memory for it, and the lines are appended after the timestamp — silently, with
+no tool call and no visible injection. It simply sits in the conversation
+until the next compact, the way a thought does.
 
 Contract with Claude Code:
   stdin  — JSON with at least `prompt` and `transcript_path`
-  stdout — either nothing, or one JSON object with hookSpecificOutput
+  stdout — one JSON object with hookSpecificOutput (at minimum the timestamp)
   exit   — ALWAYS 0. A hook must never block or pollute the conversation, so
            every failure path (missing file, broken JSON line, server down,
-           timeout) degrades to silence.
+           timeout) degrades to the bare timestamp.
 
   WARNING: Claude Code injects this script's ENTIRE stdout into the
   conversation as context — including non-JSON text. A stray debug print()
@@ -41,10 +44,23 @@ import random
 import sys
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 DEFAULT_ENDPOINT = "http://localhost:3456/associate"
 DEFAULT_PROBABILITY = 0.15
 DEFAULT_TIMEOUT = 5.0
+
+WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _stamp_line() -> str:
+    """Toronto-time stamp for this user message. Never raises."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/Toronto"))
+    except Exception:
+        now = datetime.now()  # WSL inherits the local (Toronto) clock anyway
+    return f"〔发送于 {now.strftime('%Y-%m-%d %H:%M')} {WEEKDAY_CN[now.weekday()]}〕"
 
 TAIL_LINES = 80        # how far back in the JSONL to look
 SEED_MAX_CHARS = 600   # total seed length handed to the retriever
@@ -151,32 +167,32 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except Exception:
-        return 0
+        payload = {}
     if not isinstance(payload, dict):
-        return 0
+        payload = {}
 
+    parts = [_stamp_line()]
+
+    # Associative surfacing rides along on a die roll; any failure below
+    # degrades to the bare timestamp, never to silence.
     probability = _env_float("ASSOCIATE_PROBABILITY", DEFAULT_PROBABILITY)
-    if random.random() >= probability:
-        return 0
-
-    seed = _read_seed(
-        str(payload.get("transcript_path") or ""),
-        str(payload.get("prompt") or ""),
-    )
-    if not seed:
-        return 0
-
-    try:
-        lines = _fetch(seed)
-    except Exception:
-        return 0
-    if not lines:
-        return 0
+    if random.random() < probability:
+        seed = _read_seed(
+            str(payload.get("transcript_path") or ""),
+            str(payload.get("prompt") or ""),
+        )
+        if seed:
+            try:
+                lines = _fetch(seed)
+            except Exception:
+                lines = ""
+            if lines:
+                parts += [PREAMBLE, lines]
 
     sys.stdout.write(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": f"{PREAMBLE}\n{lines}",
+            "additionalContext": "\n".join(parts),
         }
     }, ensure_ascii=False))
     return 0
