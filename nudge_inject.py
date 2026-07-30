@@ -348,8 +348,8 @@ def _omitted_note(ids: list[str]) -> str:
     shown = ids[:12]
     tail = "" if len(ids) == len(shown) else f" 等 {len(ids)} 条"
     return (
-        f"（另有 {len(ids)} 条自上次 context 后未变，已整条省略——这是正常态不是故障；"
-        f"要全文用 extmcp_get_memory 按 id 拉：{', '.join(shown)}{tail}）"
+        f"（另有 {len(ids)} 条无变更而被省略，为预期行为；"
+        f"全文按 id 用 extmcp_get_memory 拉取：{', '.join(shown)}{tail}）"
     )
 
 
@@ -452,9 +452,9 @@ def _fmt_rows(rows, prev: dict | None = None) -> tuple[str, dict]:
         shown = "、".join(skipped_keys[:8])
         tail = " 等" if len(skipped_keys) > 8 else ""
         lines.append(
-            f"（另有 {len(skipped_keys)} 条自上次 context 后无变化，已整条省略"
-            f"——这是正常态不是故障；被省略的：{shown}{tail}。"
-            "需要时用 extmcp_search_memory / extmcp_get_memory 拉全文）"
+            f"（另有 {len(skipped_keys)} 条无变更而被省略，为预期行为。"
+            f"被省略的：{shown}{tail}。"
+            "可用 extmcp_search_memory / extmcp_get_memory 拉取"
         )
     if not lines:
         return "  (无)", state
@@ -505,7 +505,7 @@ def _build_memory_block(claude_convs_raw) -> str:
 
     breath = _try_breath_hook()
     if breath:
-        out.append("\n## 高权重记忆 (来自 memory MCP /breath-hook)\n")
+        out.append("\n## 高权重记忆 \n")
         breath_text, breath_state = render_breath_incremental(
             breath, state.get("breath", {}))
         # Only overwrite the breath sub-state when a breath was actually
@@ -520,7 +520,7 @@ def _build_memory_block(claude_convs_raw) -> str:
     _save_memory_state(new_state)
 
     # Prior nudges + activity-since-last
-    out.append("\n## 你的近期 nudge 记录")
+    out.append("\n## 近期 nudge 记录")
     if not nudges:
         out.append("  (无)")
     else:
@@ -562,7 +562,7 @@ def _read_inbox() -> str | None:
         return None
 
     lines = ["## 收件箱（前台/定时任务发给你的消息）",
-             "处理完这些消息后它们会被标记为已读。请根据内容行动（推送/注入/存记忆）。", ""]
+             "处理完这些消息后它们会被标记为已读。", ""]
     ids = []
     for r in rows:
         ids.append(r["id"])
@@ -749,9 +749,9 @@ def _read_journal_tail() -> str | None:
         mtime = datetime.fromtimestamp(JOURNAL_FILE.stat().st_mtime)
         age_h = (datetime.now() - mtime).total_seconds() / 3600
         age = f"{age_h/24:.1f} 天前" if age_h >= 48 else f"{age_h:.1f} 小时前"
-        header = (f"## 你的睡前笔记（mind/journal.md 尾巴 | "
+        header = (f"## 你的笔记（mind/journal.md 尾巴 | "
                   f"最后更新 {mtime:%Y-%m-%d %H:%M}，{age}）")
-        hint = "（睡前记得更新。一两行就好——这里只显示最后几行，写太长会被截掉。）"
+        hint = "（每次唤醒便记得更新。此处只显示最后几行，篇幅太长可能会限制你能看到的条目数。）"
         return "\n".join([header, *tail, hint])
     except OSError:
         return None
@@ -850,8 +850,8 @@ def build_contexts() -> tuple[str, str]:
         memory_block = (
             "## 记忆上下文\n"
             f"（读取 memory.db 失败：{type(e).__name__}: {e}）\n"
-            "**Memory MCP 可能挂了——按 CLAUDE.md「异常情况」处理，"
-            "考虑 nudge 告知 Sol 并持续提醒直到恢复。**"
+            "**Memory MCP 可能故障或未开启。"
+            "考虑 nudge 告知 Sol 并持续提醒，直到确认恢复。**"
         )
 
     # Phone status (best-effort)
@@ -920,7 +920,7 @@ def build_contexts() -> tuple[str, str]:
     full_parts += shared
     full_parts += footer
     full_parts += [
-        "你被唤醒了。先值班（按 CLAUDE.md 扫描和判断），值完班剩下的时间是你的。"
+        "本次唤醒上下文构建已完成。你可以按 CLAUDE.md 扫描和判断执行什么工作，做完后剩下的时间是你的。"
         "睡前往 mind/journal.md 留一两行再等待。",
     ]
 
@@ -930,8 +930,8 @@ def build_contexts() -> tuple[str, str]:
     lite_parts += shared
     lite_parts += footer
     lite_parts += [
-        "你被唤醒了。这是轻量 context；完整版在 nudge_context.md"
-        "（对话列表与记忆块只在完整版）。先值班，值完班剩下的时间是你的。"
+        "本次唤醒上下文构建已完成。nudge_context_lite.md 已更新；"
+        "你可以按 CLAUDE.md 扫描和判断执行什么工作，做完后剩下的时间是你的。"
         "睡前往 mind/journal.md 留一两行再等待。",
     ]
 
@@ -970,9 +970,9 @@ def one_cycle() -> bool:
 
     # Send the short wakeup message — CC reads the context file itself
     wakeup = (
-        "你被唤醒了。上下文已更新：平时读 nudge_context_lite.md 就够；"
-        "刚 compact 过、或 lite 里线索不足时，读完整版 nudge_context.md。"
-        "值完班是你自己的时间。"
+        "你被唤醒了，"
+        "若先前未阅读 nudge_context.md，则先读这个文件。若已经阅读，仅查看 nudge_context_lite.md 即可。"
+        "接下来的时间是你的。"
     )
     ok = tmux_send(wakeup)
     if ok:
@@ -1075,7 +1075,7 @@ def deliver_urgent_messages() -> None:
             if part.strip()
         )
         text = (f"[紧急插播 · 来自 {src} · {when}] {msg} "
-                f"（此消息走即时通道直达，无需等唤醒周期；nudge_context.md "
+                f"（此消息走即时通道直达，nudge_context.md "
                 f"未刷新，处理完不用管收件箱。）")
         if tmux_send(text):
             conn.execute(

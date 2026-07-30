@@ -344,7 +344,7 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
     now = datetime.now(timezone.utc)
     lines = [
         "## 最近 Claude.ai 对话 (按最后活跃时间倒序)",
-        "⚡ work! 项目的对话优先关注",
+        "⚡working! 项目的对话优先关注",
         "",
     ]
     skipped = 0
@@ -369,8 +369,8 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
     if skipped:
         lines += [
             "",
-            f"（另有 {skipped} 条对话自上次 context 后无更新，已整条省略——这是正常态不是故障；"
-            "需要它们的 conv-id 时运行 fetch_context.py 现拉列表）",
+            f"（另有 {skipped} 条对话无更新，已整条省略。这是预期行为；"
+            "需要对应 conv-id 时，运行 fetch_context.py。）",
         ]
     if total_count is not None:
         lines += ["", f"(账号共 {total_count} 条对话，仅显示前 {len(convs)} 条)"]
