@@ -28,6 +28,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +47,11 @@ from config import CFG
 SCRIPT_DIR = Path(__file__).resolve().parent
 MEMORY_DB = Path(CFG.memory_db)
 CONTEXT_FILE = SCRIPT_DIR / "nudge_context.md"
+# Fast-changing half of the same snapshot: same wakeup, same data, minus the
+# claude.ai conversation list and the memory block (slow-changing and bulky).
+# CC reads this on ordinary wakeups and falls back to CONTEXT_FILE after a
+# /compact or whenever the light version leaves it guessing.
+LITE_FILE = SCRIPT_DIR / "nudge_context_lite.md"
 MEMORY_STATE_FILE = SCRIPT_DIR / "memory_state.json"
 WAKEUP_OVERRIDE_FILE = SCRIPT_DIR / "next_wakeup.txt"
 JOURNAL_FILE = SCRIPT_DIR / "mind" / "journal.md"
@@ -61,6 +67,17 @@ RECENT_TOP_N = CFG.recent_top_n
 HIGH_IMPORTANCE_TOP_N = CFG.high_importance_top_n
 PRIOR_NUDGE_TOP_N = CFG.prior_nudge_top_n
 NUDGE_LABELS_CN = ["[上次]", "[上上次]", "[上上上次]", "[更早]"]
+
+# SwitchBot Hub 2 = the room's thermometer/hygrometer/light sensor. Pinned by
+# id rather than leaning on CFG.switchbot_device_id so that repointing the
+# config default at some other device (curtain, bulb) can't silently turn the
+# 室内环境 line into nonsense. switchbot_client passes TIMEOUT=10 to requests
+# as a scalar, which means 10s to connect *and* 10s to read (20s+ worst case,
+# and DNS resolution isn't covered at all) — far too long for the wakeup
+# pipeline, so the call runs in a throwaway thread and we give up on it after
+# SWITCHBOT_ENV_TIMEOUT.
+SWITCHBOT_HUB2_ID = "FD6A33DED601"
+SWITCHBOT_ENV_TIMEOUT = 5.0
 
 BUSY_POLL_INTERVAL = 10
 BUSY_POLL_MAX = 60
@@ -740,8 +757,72 @@ def _read_journal_tail() -> str | None:
         return None
 
 
-def build_context() -> str:
-    """Assemble the full wakeup context block."""
+def _num(v) -> float | None:
+    """Coerce a SwitchBot status field to a number, rejecting bools/junk."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_switchbot_env() -> str | None:
+    """Room climate from the SwitchBot Hub 2 (lite context only).
+
+    Best-effort in the strongest sense: any failure — no requests module, no
+    token, cloud 5xx, a degraded {'ok': False} envelope, a status body without
+    the sensor fields, or simply taking longer than SWITCHBOT_ENV_TIMEOUT —
+    returns None and the section is omitted. The worker thread is a daemon, so
+    a hung cloud call can never hold up the wakeup or the interpreter exit.
+    """
+    box: dict[str, object] = {}
+
+    def _worker() -> None:
+        try:
+            import switchbot_client
+            box["res"] = switchbot_client.get_status(SWITCHBOT_HUB2_ID)
+        except Exception as e:  # ImportError, config problems, anything
+            box["res"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(SWITCHBOT_ENV_TIMEOUT)
+
+    res = box.get("res")
+    if not isinstance(res, dict) or not res.get("ok"):
+        return None
+    status = res.get("status")
+    if not isinstance(status, dict):
+        return None
+
+    bits: list[str] = []
+    temp = _num(status.get("temperature"))
+    if temp is not None:
+        bits.append(f"温度 {temp:g}°C")
+    hum = _num(status.get("humidity"))
+    if hum is not None:
+        bits.append(f"湿度 {hum:g}%")
+    light = _num(status.get("lightLevel"))
+    if light is not None:
+        bits.append(f"光照 {light:g}/20")
+    if not bits:
+        return None
+    return "## 室内环境\n" + " / ".join(bits)
+
+
+def build_contexts() -> tuple[str, str]:
+    """Assemble the wakeup context in two renderings: (full, lite).
+
+    Every source is fetched exactly once here and the rendered text is shared
+    between the two versions — _read_inbox() in particular marks rows seen as
+    a side effect, so calling it twice per cycle would hide messages from
+    whichever version was rendered second.
+
+    full: byte-for-byte the historical nudge_context.md.
+    lite: the fast-changing sections only, plus the room's climate. No
+    claude.ai conversation list, no memory block.
+    """
     now = datetime.now()
     weekday = WEEKDAY_CN[now.weekday()]
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -779,54 +860,82 @@ def build_context() -> str:
     # Backend inbox (messages from frontstage / scheduled tasks)
     inbox_block = _read_inbox()
 
-    parts = [
-        f"当前时间：{now_str}（{weekday}）",
-        "",
-        claude_block,
-        "",
-        memory_block,
-    ]
-    if inbox_block:
-        parts += ["", inbox_block]
-    if phone_block:
-        parts += ["", phone_block]
-    else:
-        parts += ["", "## 手机状态\n（本次唤醒未能获取 iPhone Shortcut 状态，可能 Memory MCP HTTP 未启动或超时）"]
-
     # Phone event stream from iOS automations (best-effort; empty -> omitted)
     phone_events_block = _fetch_phone_events()
-    if phone_events_block:
-        parts += ["", phone_events_block]
 
     # PC presence: idle time, foreground window, Chrome tabs (best-effort)
     try:
         pc_block = pc_status.check()
     except Exception:
         pc_block = None
-    if pc_block:
-        parts += ["", pc_block]
 
     # X notifications (best-effort, requires Chrome remote debugging on 9222)
     try:
         x_block = x_notif.check()
     except Exception:
         x_block = None
-    if x_block:
-        parts += ["", x_block]
 
     journal_block = _read_journal_tail()
-    if journal_block:
-        parts += ["", journal_block]
 
-    parts += [
+    # Room climate from the Hub 2 — lite only (the full version's shape is
+    # frozen for backward compatibility). Belt and braces: the helper already
+    # swallows everything internally, but even Thread.start() can raise, and a
+    # thermometer must never be able to cost us a whole wakeup.
+    try:
+        env_block = _fetch_switchbot_env()
+    except Exception:
+        env_block = None
+
+    # ---- sections both versions carry, rendered once ----
+    shared: list[str] = []
+    if inbox_block:
+        shared += ["", inbox_block]
+    if phone_block:
+        shared += ["", phone_block]
+    else:
+        shared += ["", "## 手机状态\n（本次唤醒未能获取 iPhone Shortcut 状态，可能 Memory MCP HTTP 未启动或超时）"]
+    if phone_events_block:
+        shared += ["", phone_events_block]
+    if pc_block:
+        shared += ["", pc_block]
+    if x_block:
+        shared += ["", x_block]
+    if journal_block:
+        shared += ["", journal_block]
+
+    footer = [
         "",
         "---",
         "",
         f"本次唤醒类型：{_wakeup_source} | 预计下次唤醒：{_planned_next_wakeup}",
+    ]
+
+    full_parts = [
+        f"当前时间：{now_str}（{weekday}）",
+        "",
+        claude_block,
+        "",
+        memory_block,
+    ]
+    full_parts += shared
+    full_parts += footer
+    full_parts += [
         "你被唤醒了。先值班（按 CLAUDE.md 扫描和判断），值完班剩下的时间是你的。"
         "睡前往 mind/journal.md 留一两行再等待。",
     ]
-    return "\n".join(parts)
+
+    lite_parts = [f"当前时间：{now_str}（{weekday}）"]
+    if env_block:
+        lite_parts += ["", env_block]
+    lite_parts += shared
+    lite_parts += footer
+    lite_parts += [
+        "你被唤醒了。这是轻量 context；完整版在 nudge_context.md"
+        "（对话列表与记忆块只在完整版）。先值班，值完班剩下的时间是你的。"
+        "睡前往 mind/journal.md 留一两行再等待。",
+    ]
+
+    return "\n".join(full_parts), "\n".join(lite_parts)
 
 
 # ---------- one cycle ----------
@@ -841,7 +950,7 @@ def one_cycle() -> bool:
               file=sys.stderr)
         return False
 
-    # Pre-calculate the tentative next wakeup so build_context can show it
+    # Pre-calculate the tentative next wakeup so build_contexts can show it
     sleep_secs, _ = calc_sleep_seconds()
     tentative_wake = datetime.now() + timedelta(seconds=sleep_secs)
     _planned_next_wakeup = tentative_wake.strftime("%Y-%m-%d %H:%M")
@@ -849,10 +958,11 @@ def one_cycle() -> bool:
     # Build context and write to file
     print(f"[{_stamp()}] building context...")
     t0 = time.time()
-    ctx = build_context()
+    ctx, lite = build_contexts()
     print(f"[{_stamp()}] context built in {time.time()-t0:.1f}s "
-          f"({len(ctx)} chars)")
+          f"({len(ctx)} chars, lite {len(lite)} chars)")
     CONTEXT_FILE.write_text(ctx, encoding="utf-8")
+    LITE_FILE.write_text(lite, encoding="utf-8")
 
     # Wait for CC to be idle
     if not wait_for_idle():
@@ -860,7 +970,8 @@ def one_cycle() -> bool:
 
     # Send the short wakeup message — CC reads the context file itself
     wakeup = (
-        "你被唤醒了。上下文已更新到 nudge_context.md，请 Read 后先值班；"
+        "你被唤醒了。上下文已更新：平时读 nudge_context_lite.md 就够；"
+        "刚 compact 过、或 lite 里线索不足时，读完整版 nudge_context.md。"
         "值完班是你自己的时间。"
     )
     ok = tmux_send(wakeup)

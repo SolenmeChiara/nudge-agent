@@ -12,6 +12,7 @@ next_run.txt
 next_wakeup.txt
 nudge_inject.log
 nudge_context.md
+nudge_context_lite.md
 config.json
 CLAUDE.md
 .mcp.json
