@@ -23,11 +23,6 @@ CLAUDE.md
 #                  sections) plus the X notification counter
 logs/
 
-# Transitional: the pre-move injector still holds an append handle on the old
-# root-level log, so the file survives until the next restart. Drop this line
-# once the leftover root copy is gone.
-nudge_inject.log
-
 # CC-touched signal telling the monitor its X notifications were handled.
 # Lives in the project root on purpose — the docs tell CC to touch it there.
 x_notif_ack
