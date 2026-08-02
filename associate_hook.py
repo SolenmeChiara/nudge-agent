@@ -189,12 +189,16 @@ def main() -> int:
             if lines:
                 parts += [PREAMBLE, lines]
 
+    # ensure_ascii stays on: Windows Python writes stdout in the system code
+    # page (gbk here), so raw CJK would reach Claude Code as mojibake. Escaped
+    # \uXXXX is pure ASCII, survives any code page, and the JSON parser on the
+    # other end hands back the same string either way.
     sys.stdout.write(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": "\n".join(parts),
         }
-    }, ensure_ascii=False))
+    }))
     return 0
 
 
