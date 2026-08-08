@@ -8,9 +8,14 @@
     python3 session_role.py --quiet  # 只吐一个词：direct / relay / unknown
 
 判定规则（CLAUDE.md「多 session 管理」节）：
-注入器唤醒的那一个是直循环。所以看注入器最近一次注入之后、本 session 活跃之前，
-有没有别的 session 动过 —— 有，说明注入器叫的是它，本 session 是被它转发唤醒的
-（间循环）；没有，本 session 就是直循环。
+门牌名里写了「直循环」/「间循环」就直接采信 —— 名字是 Sol 起的意图声明，比猜可靠。
+名字没写才退回启发式：注入器唤醒的那一个是直循环，所以看注入器最近一次注入之后、
+本 session 活跃之前有没有别的 session 动过 —— 有，说明注入器叫的是它，本 session 是被
+它转发唤醒的（间循环）；没有，本 session 就是直循环。
+
+启发式的失效场景（2026-08-08 实测翻车）：间循环被 Sol 从手机 remote control 直连时，
+它有了独立于注入器的活跃源，时间戳会跑到直循环前面，于是直循环被判成间循环。
+「注入器叫谁谁先动」这个前提一旦破了，启发式就没救，只能靠名字。
 
 注册表 ~/.claude/sessions/<pid>.json 里死进程的残留很常见（进程崩了不会自己清），
 所以每条都拿 pid 存活性过一遍再算。
@@ -107,7 +112,11 @@ def main():
     role, why = "unknown", "找不到本 session 的注册档案"
     if me is not None:
         mine = next((d for d in sessions if d["pid"] == me), None)
-        if mine and inject:
+        name = (mine or {}).get("name", "") or ""
+        if mine and ("直循环" in name or "间循环" in name):
+            role = "direct" if "直循环" in name else "relay"
+            why = f"门牌名「{name}」写明了角色，不走启发式"
+        elif mine and inject:
             t_me = mine.get("updatedAt", 0)
             between = [d for d in sessions
                        if d["pid"] != me and inject < d.get("updatedAt", 0) < t_me
