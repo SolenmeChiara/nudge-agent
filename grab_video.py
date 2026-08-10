@@ -47,7 +47,14 @@ def normalize(url: str) -> str:
             m = BV.search(url)
         except Exception as e:
             print(f"短链没解开（{e}），原样交给 yt-dlp 试试")
-    return f"https://www.bilibili.com/video/{m.group(0)}" if m else url
+    if not m:
+        return url
+    base = f"https://www.bilibili.com/video/{m.group(0)}"
+    # 分 P 参数是唯一要保住的查询参数，削掉就永远只能下到第一 P
+    m_p = re.search(r"[?&]p=(\d+)", url)
+    if m_p and int(m_p.group(1)) > 1:
+        base += f"?p={m_p.group(1)}"
+    return base
 
 
 def win_path(p: Path) -> str:
@@ -88,8 +95,11 @@ def main() -> int:
 
     # 先问元信息：拿 id 判断缓存，拿时长防手滑
     print(f"查 {url} ...")
+    # 带 ?p=N 时不能加 --no-playlist：B 站分 P 在 yt-dlp 眼里是 playlist 项，
+    # --no-playlist 会无视 p 参数退回第一 P（2026-08-10 实测）
+    no_playlist = [] if "?p=" in url else ["--no-playlist"]
     probe = run(
-        [ytdlp, "--no-playlist", "--dump-single-json", "--no-warnings",
+        [ytdlp, *no_playlist, "--dump-single-json", "--no-warnings",
          "--socket-timeout", "20", url],
         capture_output=True,
     )
@@ -128,7 +138,7 @@ def main() -> int:
         f"/b[height<={h}]/bv*+ba/b"
     )
     cmd = [
-        ytdlp, "--no-playlist", "--no-warnings",
+        ytdlp, *no_playlist, "--no-warnings",
         "-f", fmt,
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "4",
