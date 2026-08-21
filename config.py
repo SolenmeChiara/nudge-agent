@@ -46,6 +46,11 @@ class Config:
     peek_mail_to: str = ""
     peek_mail_subject: str = "sol-PEEK"
 
+    # send_doc.py: inbox that rendered markdown documents get mailed to.
+    # Deliberately separate from peek_mail_to, which triggers an iPhone
+    # shortcut. Real address lives in config.json only (gitignored).
+    doc_mail_to: str = ""
+
     # SwitchBot cloud API v1.1 (Color Bulb control).
     # token/secret live in config.json only (gitignored); device_id is
     # auto-resolved on first run or filled once known. Empty = "not

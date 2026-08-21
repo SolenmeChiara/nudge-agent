@@ -12,6 +12,7 @@
   "peek_smtp_password": "16-char-app-password",
   "peek_mail_to": "your-icloud@icloud.com",
   "peek_mail_subject": "sol-PEEK",
+  "doc_mail_to": "",
   "tmux_session": "nudge-agent",
   "min_nudge_gap_minutes": 20,
   "day_min_minutes": 20,
