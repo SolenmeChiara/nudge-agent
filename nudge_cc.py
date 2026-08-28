@@ -632,13 +632,13 @@ def sleep_with_interrupt(seconds: float) -> None:
 def calc_sleep_seconds(min_minutes: int, max_minutes: int) -> tuple[int, str]:
     """Pick the next-cycle delay based on local time-of-day.
 
-    Night window (22:00–07:30): 3 hours fixed — Sol is likely asleep.
+    Night window (00:00–07:30): 3 hours fixed — Sol is likely asleep.
     Day window: random within [min_minutes, max_minutes] (default 20–60).
     Returns (seconds, mode_tag) so the loop can log which schedule it used.
     """
     now = datetime.now()
     hour, minute = now.hour, now.minute
-    is_night = hour >= 22 or hour < 7 or (hour == 7 and minute < 30)
+    is_night = hour < 7 or (hour == 7 and minute < 30)
     if is_night:
         return 3 * 3600, "night"
     return random.randint(min_minutes * 60, max_minutes * 60), "day"
