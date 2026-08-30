@@ -308,7 +308,13 @@ def _try_breath_hook() -> str | None:
 # Segments that are never collapsed: WORKING is the live promise list and WATCH
 # holds the crisis observation windows. Both are short and both matter enough
 # that a stale "unchanged, omitted" line is worse than the tokens it saves.
-BREATH_ALWAYS_FULL = frozenset({"WORKING", "WATCH"})
+# CHRONICLE joined them 2026-08-30: it is memory_mcp's fixed day/week/month/year
+# digest strip, and its whole point is being on screen every wakeup. Its rows
+# barely ever change, so collapsing would hide it permanently after cycle #1 —
+# exactly the opposite of what it is for. Costs ~2.5k characters per context;
+# tune with BREATH_CHRONICLE_ROW_CHARS_FULL on the memory MCP side, or drop the
+# name from this set to let it collapse like PINNED/CORE/TOP.
+BREATH_ALWAYS_FULL = frozenset({"WORKING", "WATCH", "CHRONICLE"})
 
 _BREATH_ID_RE = re.compile(r"^\[id:([^\]]+)\]")
 _BREATH_HEADER_RE = re.compile(r"^===\s*(.+?)\s*===$")
