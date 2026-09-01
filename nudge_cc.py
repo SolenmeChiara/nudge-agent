@@ -638,7 +638,7 @@ def calc_sleep_seconds(min_minutes: int, max_minutes: int) -> tuple[int, str]:
     """
     now = datetime.now()
     hour, minute = now.hour, now.minute
-    is_night = hour < 7 or (hour == 7 and minute < 30)
+    is_night = (hour == 1 and minute >= 30) or (2 <= hour < 6) or (hour == 6 and minute < 40)
     if is_night:
         return 3 * 3600, "night"
     return random.randint(min_minutes * 60, max_minutes * 60), "day"

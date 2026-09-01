@@ -1009,12 +1009,10 @@ def one_cycle() -> bool:
 def calc_sleep_seconds() -> tuple[int, str]:
     now = datetime.now()
     hour, minute = now.hour, now.minute
-    is_night = hour >= 22 or hour < 7 or (hour == 7 and minute < 30)
+    is_night = (hour == 1 and minute >= 30) or (2 <= hour < 6) or (hour == 6 and minute < 40)
     if is_night:
         secs = CFG.night_hours * 3600
-        day_start = now.replace(hour=7, minute=30, second=0, microsecond=0)
-        if now.hour >= 22:
-            day_start += timedelta(days=1)
+        day_start = now.replace(hour=6, minute=40, second=0, microsecond=0)
         to_day_start = (day_start - now).total_seconds()
         if 0 < to_day_start < secs:
             return int(to_day_start), "night→dawn"
