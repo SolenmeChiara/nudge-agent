@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import queue
 import random
 import re
 import signal
@@ -1147,7 +1148,37 @@ def sleep_with_interrupt(seconds: float) -> None:
 
 # ---------- main ----------
 
+def _disable_console_quick_edit() -> None:
+    """Windows only: turn off the console's QuickEdit mode (best effort).
+
+    Under classic conhost a click inside the window enters text-selection
+    mode and the console stops draining output until a key is pressed, so
+    every print() blocks. The injector currently runs under Windows Terminal
+    (start_nudge.bat → system default terminal), which has no such pause, so
+    this only guards the conhost case; the real protection against a
+    terminal that stops consuming output is _Tee's background console
+    writer below. Any failure leaves the mode as it was.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+        enable_quick_edit = 0x0040
+        enable_extended_flags = 0x0080
+        k32.SetConsoleMode(
+            handle, (mode.value | enable_extended_flags) & ~enable_quick_edit
+        )
+    except Exception:
+        pass
+
+
 def main() -> int:
+    _disable_console_quick_edit()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
@@ -1157,30 +1188,62 @@ def main() -> int:
     # minimized console whose output is never seen — without this, override
     # decisions ("accepted" / "in the past, ignoring") leave no record on disk.
     class _Tee:
-        def __init__(self, *streams):
-            self._streams = streams
+        """Log file first and synchronously, console second and detached.
+
+        The log file is the record; the console is a courtesy view nobody
+        looks at. A console that stops draining (QuickEdit selection, a
+        wedged terminal host) must not stall the wakeup loop, so console
+        writes go through a bounded queue served by a daemon thread and are
+        dropped when it fills. File writes stay on the caller's thread so a
+        line is on disk before the next statement runs.
+
+        Background: 2026-09-03 cycle #15 sat 45 minutes between two print()
+        calls (2026-07-12 shows a 34-minute twin). The hosting terminal —
+        Windows Terminal over conpty — had stopped taking output while Sol
+        was away from the PC and resumed the minute he came back and clicked
+        the window. Exact trigger unconfirmed (hours minimized / display
+        asleep / the click itself); the fix is the same either way.
+        """
+        def __init__(self, logf, console):
+            self._logf = logf
+            self._q: queue.Queue = queue.Queue(maxsize=2000)
+            threading.Thread(
+                target=self._pump, args=(console,), daemon=True,
+                name="tee-console",
+            ).start()
+
+        def _pump(self, console):
+            while True:
+                s = self._q.get()
+                try:
+                    console.write(s)
+                    console.flush()
+                except Exception:
+                    pass
 
         def write(self, s):
-            for st in self._streams:
-                try:
-                    st.write(s)
-                    st.flush()
-                except Exception:
-                    pass
+            try:
+                self._logf.write(s)
+                self._logf.flush()
+            except Exception:
+                pass
+            try:
+                self._q.put_nowait(s)
+            except queue.Full:
+                pass
 
         def flush(self):
-            for st in self._streams:
-                try:
-                    st.flush()
-                except Exception:
-                    pass
+            try:
+                self._logf.flush()
+            except Exception:
+                pass
 
     try:
         _logf = open(LOG_FILE, "a", encoding="utf-8")
         _logf.write(f"\n===== injector started {_stamp()} =====\n")
         _logf.flush()
-        sys.stdout = _Tee(sys.stdout, _logf)
-        sys.stderr = _Tee(sys.stderr, _logf)
+        sys.stdout = _Tee(_logf, sys.stdout)
+        sys.stderr = _Tee(_logf, sys.stderr)
     except OSError:
         pass
 
