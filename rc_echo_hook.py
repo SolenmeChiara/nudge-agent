@@ -19,12 +19,16 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 
 NTFY_URL = "https://ntfy.sh/"
 NTFY_TOPIC = "sol-nudge-private"
 NTFY_MARKER = "ntfy.sh/sol-nudge-private"
 TIMEOUT = 10
+# Stop 触发时本回合的 assistant 条目可能还没落盘，等这么久重读几次
+RETRY_TIMES = 3
+RETRY_WAIT = 1.2
 
 # 尾部读取窗口：transcript 可能有几十 MB，只读末尾这么多字节
 TAIL_BYTES = 2 * 1024 * 1024
@@ -218,6 +222,22 @@ def find_last_prompt(rows):
     return -1
 
 
+def find_prompt_by_uuid(rows, uuid):
+    if not uuid:
+        return -1
+    for i in range(len(rows) - 1, -1, -1):
+        if rows[i].get("uuid") == uuid and is_real_prompt(rows[i]):
+            return i
+    return -1
+
+
+def assistants_after(rows, idx):
+    return [
+        r for r in rows[idx + 1:]
+        if r.get("type") == "assistant" and not r.get("isSidechain")
+    ]
+
+
 def origin_kind(entry):
     o = entry.get("origin")
     if isinstance(o, dict):
@@ -345,10 +365,25 @@ def run():
         log("skip:prefix")
         return
 
-    assistants = [
-        r for r in rows[idx + 1:]
-        if r.get("type") == "assistant" and not r.get("isSidechain")
-    ]
+    assistants = assistants_after(rows, idx)
+    # 9/5 实测 5.1 侧五次 skip:no-assistant：assistant 条目时间戳都早于 hook
+    # 触发 2–7 秒，只是还没写进 transcript。等一小会儿重读，按 uuid 重新定位
+    # 同一个提示，免得被回合中新到的 RC 消息顶掉。
+    puuid = prompt.get("uuid")
+    for _ in range(RETRY_TIMES):
+        if assistants:
+            break
+        time.sleep(RETRY_WAIT)
+        rows2, start2 = read_tail_lines(tpath)
+        rows2 = normalize_rows(rows2)
+        j = find_prompt_by_uuid(rows2, puuid)
+        if j < 0 and start2 > 0:
+            rows2 = normalize_rows(read_all_lines(tpath))
+            j = find_prompt_by_uuid(rows2, puuid)
+        if j < 0:
+            break
+        rows, idx = rows2, j
+        assistants = assistants_after(rows, idx)
     if not assistants:
         log("skip:no-assistant")
         return
