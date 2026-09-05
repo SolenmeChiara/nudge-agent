@@ -370,10 +370,12 @@ def run():
     # 触发 2–7 秒，只是还没写进 transcript。等一小会儿重读，按 uuid 重新定位
     # 同一个提示，免得被回合中新到的 RC 消息顶掉。
     puuid = prompt.get("uuid")
+    retried = 0
     for _ in range(RETRY_TIMES):
         if assistants:
             break
         time.sleep(RETRY_WAIT)
+        retried += 1
         rows2, start2 = read_tail_lines(tpath)
         rows2 = normalize_rows(rows2)
         j = find_prompt_by_uuid(rows2, puuid)
@@ -385,8 +387,12 @@ def run():
         rows, idx = rows2, j
         assistants = assistants_after(rows, idx)
     if not assistants:
-        log("skip:no-assistant")
-        return
+        # 重读仍无 assistant 条目：若 Stop 入参带 last_assistant_message，
+        # 交给下面的兜底分支（模型名会退成「claude」）；否则放弃
+        fb = payload.get("last_assistant_message")
+        if not (isinstance(fb, str) and fb.strip()):
+            log("skip:no-assistant" + ("+r%d" % retried if retried else ""))
+            return
 
     if turn_used_ntfy(assistants):
         log("skip:已手动镜像")
@@ -425,12 +431,13 @@ def run():
         "click": "claude://",
     }
 
+    mark = "+r%d" % retried if retried else ""
     if os.environ.get("RC_ECHO_DRY_RUN") == "1":
         sys.stderr.write(json.dumps(body, ensure_ascii=False) + "\n")
-        log("dry-run", preview)
+        log("dry-run" + mark, preview)
     else:
         send(body)
-        log("sent", preview)
+        log("sent" + mark, preview)
 
     seen[sid] = uuid
     save_state(spath, seen)
