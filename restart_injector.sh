@@ -9,7 +9,7 @@ NETSTAT=/mnt/c/Windows/System32/netstat.exe
 TASKKILL=/mnt/c/Windows/System32/taskkill.exe
 PS=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
 
-old_pid=$($NETSTAT -ano | grep -E '127\.0\.0\.1:48765.+LISTENING' | awk '{print $NF}' | head -1)
+old_pid=$($NETSTAT -ano | grep -E '127\.0\.0\.1:48765.+LISTENING' | awk '{print $NF}' | head -1 | tr -d '\r')
 if [ -n "$old_pid" ]; then
     echo "杀旧注入器 PID $old_pid"
     $TASKKILL /PID "$old_pid" /F
