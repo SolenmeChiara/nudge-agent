@@ -50,7 +50,7 @@ Built for ADHD time-blindness. The agent wakes up every 20-60 minutes, reads you
 | `x_notif.py` | Watches the X tab title for unread-count growth, renders a notification block |
 | `see_screen.py` | Agent-initiated iPhone screenshot: trigger mail → phone automation screenshots and uploads → agent reads the image |
 | `start_nudge.bat` | Windows one-click startup: Chrome debug, Health ingester, tmux CC (auto-permissions), injector |
-| `nudge_cc.py` | Legacy single-shot mode (`claude -p`). Deprecated, kept for reference |
+| `archive/legacy/nudge_cc.py` | Legacy single-shot mode (`claude -p`). Deprecated, archived 2026-09-07 with `test_cdp_connect.py`; finished plan docs live in `archive/plans/` |
 | `CLAUDE.md` | Persona + instructions for the persistent CC instance (you write this) |
 | `CLAUDE.template.md` | Starting point for your own CLAUDE.md |
 | `.mcp.json` | MCP server config (Memory MCP over HTTP; see setup note on WSL) |

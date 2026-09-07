@@ -1,6 +1,6 @@
 """Periodic wakeup injector for the tmux-hosted Claude Code nudge agent.
 
-Architecture change from nudge_cc.py:
+Architecture change from nudge_cc.py (now archive/legacy/nudge_cc.py):
   OLD: this script calls `claude -p`, parses SKIP/nudge output, sends ntfy itself
   NEW: this script writes context to a file and pokes the *persistent* Claude Code
        instance living in a tmux session. CC has full tool access and decides

@@ -46,3 +46,6 @@ AGENTS.md
 # Sol's coursework & academic files (syllabi, homework, personal info) — private, stays local.
 school/
 CLAUDE.md.bak*
+
+# Untracked backups of live scripts (nudge_inject / rc_echo_hook .bak_*)
+archive/bak/
