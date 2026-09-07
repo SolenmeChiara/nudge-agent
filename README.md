@@ -20,7 +20,8 @@ Built for ADHD time-blindness. The agent wakes up every 20-60 minutes, reads you
                     ┌─────────────┴────────────────────────┐
                     │      nudge_inject.py (Windows)        │
                     │  - builds context every 20-60 min     │
-                    │  - writes nudge_context.md             │
+                    │  - writes nudge_context.md (full) +    │
+                    │    nudge_context_lite.md (fast bits)   │
                     │  - sends wakeup via tmux send-keys     │
                     └──┬──────────┬───────────────────┬────┘
                        │          │                   │
@@ -41,15 +42,58 @@ Built for ADHD time-blindness. The agent wakes up every 20-60 minutes, reads you
 
 ## Components
 
+**Core loop**
+
 | File | Role |
 |------|------|
-| `nudge_inject.py` | Timer loop: builds context, writes `nudge_context.md`, pokes the tmux CC instance, delivers urgent messages between wakeups |
+| `nudge_inject.py` | Timer loop: builds context, writes `nudge_context.md` (full) and `nudge_context_lite.md` (fast-changing subset), pokes the tmux CC instance, delivers urgent messages between wakeups, and sends `/compact` on a schedule (see "How it works") |
 | `fetch_context.py` | Pulls Claude.ai conversation list + last 3 messages per conversation via session cookie |
 | `inject_claude.py` | Playwright CDP bridge: types messages into Claude.ai's chat input |
 | `pc_status.py` | PC presence probe: keyboard/mouse idle, foreground window, Chrome tab titles (CDP metadata only) |
 | `x_notif.py` | Watches the X tab title for unread-count growth, renders a notification block |
 | `see_screen.py` | Agent-initiated iPhone screenshot: trigger mail → phone automation screenshots and uploads → agent reads the image |
+
+**Eyes (probes & senses)**
+
+| File | Role |
+|------|------|
+| `probe.py` | Telemetry probe: PC/phone/heart-rate/living-room-mic status in one command, or `pc`/`phone`/`hr`/`ears`/`shot --yes` individually |
+| `sentry.sh` | Background sentinel: watches phone/PC status and key files for a state flip, exits and logs on the first hit |
+| `see_room.py` | Grabs one frame from the living-room USB webcam (via Windows ffmpeg) into `mind/Claude_photos/room/` |
+| `audio_probe.py` | Analyzes a video/audio file's loudness, spectral centroid, and zero-crossing rate to sanity-check generated audio |
+
+**Hands (devices & output)**
+
+| File | Role |
+|------|------|
+| `hue_client.py` | Philips Hue Bridge CLI over local LAN (CLIP API v2): on/off, brightness, color, color-temperature control |
+| `switchbot_client.py` | SwitchBot cloud OpenAPI v1.1 CLI: Hub 2 indoor environment (`status`), `devices`, generic `send_command` (curtain); bulb subcommands are legacy |
+| `send_doc.py` | Renders a markdown file to HTML and emails it (with the raw file attached) via SMTP |
+| `grab_video.py` | Downloads a Bilibili/yt-dlp video into a local cache, auto-retrying with Chrome cookies on a 412 |
+
+**Session plumbing**
+
+| File | Role |
+|------|------|
+| `session_role.py` | Determines whether this session is the injector-woken direct loop or a relay loop among concurrent instances |
+| `wake_session.py` | Wakes another tmux Claude Code instance on the same machine via `tmux send-keys` |
+| `rc_echo_hook.py` | Stop hook: mirrors the assistant's reply to ntfy when the turn came from a phone Remote-Control message |
+| `associate_hook.py` | UserPromptSubmit hook: timestamps every message and occasionally surfaces a random old memory alongside it |
+| `config.py` | Centralized config loader: reads `config.json`, falling back to `config.example.json` defaults, for every other script |
+
+**Launchers**
+
+| File | Role |
+|------|------|
 | `start_nudge.bat` | Windows one-click startup: Chrome debug, Health ingester, tmux CC (auto-permissions), injector |
+| `start_tmux_agent.bat` | Starts just the persistent Claude Code instance inside a WSL tmux session (no Chrome or injector) |
+| `start_chrome_debug.bat` | Launches a dedicated Chrome profile with `--remote-debugging-port=9222` open, for injection and PC/tab probing |
+| `restart_injector.sh` | Restarts the Windows-side injector from WSL: kills the old process via the 48765 lock, relaunches, verifies single instance |
+
+**Config & persona**
+
+| File | Role |
+|------|------|
 | `archive/legacy/nudge_cc.py` | Legacy single-shot mode (`claude -p`). Deprecated, archived 2026-09-07 with `test_cdp_connect.py`; finished plan docs live in `archive/plans/` |
 | `CLAUDE.md` | Persona + instructions for the persistent CC instance (you write this) |
 | `CLAUDE.template.md` | Starting point for your own CLAUDE.md |
@@ -172,7 +216,7 @@ If you'd rather grant permissions selectively, drop the flag and use `.claude/se
 
 ## How it works
 
-Every 20-60 minutes (3h at night), the injector:
+Every 20-60 minutes during the day (3h at night; day range configurable via `day_min_minutes`/`day_max_minutes` in `config.json`), the injector:
 
 1. Fetches your recent Claude.ai conversations (titles + last few messages)
 2. Reads recent memories and prior nudge history from the database
@@ -180,10 +224,12 @@ Every 20-60 minutes (3h at night), the injector:
 4. Fetches phone status (battery, focus mode, current app, now playing…) and the 48h phone-event timeline
 5. Probes PC presence (keyboard/mouse idle time, foreground window, Chrome tab titles via CDP) and X notification growth
 6. Appends the tail of the agent's own journal (yesterday's self leaving notes for today's)
-7. Writes everything to `nudge_context.md`
+7. Writes the full snapshot to `nudge_context.md` and a fast-changing subset (time, phone/PC status, inbox, journal tail, indoor environment — no Claude.ai conversation list, no memory block) to `nudge_context_lite.md`
 8. Sends a wakeup message to the tmux Claude Code instance
 
-Between wakeups, the sleep loop polls every 30 seconds for **urgent** inbox rows and injects them straight into the Claude Code chat as they arrive — see "Urgent express lane" below.
+The agent reads the full file once after a restart or `/compact`, then just the lite file on ordinary wakeups — cheaper to read, and it still carries everything that could have changed since the last one.
+
+Between wakeups, the sleep loop polls every 30 seconds for **urgent** inbox rows and injects them straight into the Claude Code chat as they arrive — see "Urgent express lane" below. The same sleep loop also sends `/compact` to the CC session every `COMPACT_INTERVAL_HOURS` hours (default 6, summarizing history instead of wiping it) or immediately if the agent leaves a one-shot `request_compact` file in the project root.
 
 Claude Code then reads the context and **autonomously decides** what to do:
 - Send a push notification to your phone via ntfy

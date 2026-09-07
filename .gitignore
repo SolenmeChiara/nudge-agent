@@ -49,3 +49,6 @@ CLAUDE.md.bak*
 
 # Untracked backups of live scripts (nudge_inject / rc_echo_hook .bak_*)
 archive/bak/
+
+# Pre-compact handover notes between CC sessions; the tidy sweeps them into mind/handovers/
+handover_*.md
