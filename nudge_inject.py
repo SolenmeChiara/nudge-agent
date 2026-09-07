@@ -108,6 +108,14 @@ COMPACT_REQUEST_FILE = SCRIPT_DIR / "request_compact"
 # file (CC/Sol may decide the committed wake time is wrong mid-sleep).
 OVERRIDE_RECHECK_INTERVAL = 30
 
+# Floor on the between-cycle sleep. The wake time is committed at the START of
+# a cycle, so everything the cycle then spends (wait_for_idle, CC's whole turn,
+# /compact) is subtracted from the wait — and a turn longer than the drawn
+# interval would leave zero, waking CC again the instant it stopped typing.
+# Five minutes is well under the 20-minute day minimum, so it only ever binds
+# in that overrun case; it never shortens a normal interval.
+MIN_SLEEP_SECONDS = 300
+
 WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 _stop = False
@@ -129,12 +137,37 @@ def _stamp() -> str:
 # ---------- tmux helpers (call WSL from Windows) ----------
 
 def _wsl(*args: str, timeout: int = 15) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["wsl"] + list(args),
-        capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-        timeout=timeout,
-    )
+    """Run a command inside WSL. Never raises — returns a failed process instead.
+
+    Only one of the four call sites (`one_cycle`) sits inside main()'s
+    try/except; `wait_for_idle`, `maybe_compact` and the urgent-message
+    express lane all call this from the bare loop body, so a hung `wsl.exe`
+    (TimeoutExpired) or a missing/unspawnable one (FileNotFoundError, OSError)
+    used to take the whole injector down and leave CC unwoken until someone
+    noticed. Callers already treat a nonzero returncode as "tmux is not
+    answering": tmux_session_alive → not alive (cycle aborts without sending),
+    tmux_capture_tail → "" → is_cc_idle → busy (the conservative default: we
+    poll and defer /compact rather than typing into an unknown screen),
+    tmux_send → False (urgent rows stay pending and are retried).
+    """
+    argv = ["wsl"] + list(args)
+    try:
+        return subprocess.run(
+            argv,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        reason = f"wsl call timed out after {timeout}s"
+    except FileNotFoundError:
+        reason = "wsl.exe not found on PATH"
+    except OSError as e:
+        reason = f"wsl call failed to spawn: {e}"
+    # args[:3] is always the tmux verb + '-t' (never the payload of send-keys),
+    # so this line cannot leak an inbox message into the log.
+    print(f"[{_stamp()}] _wsl {' '.join(args[:3])} — {reason}", file=sys.stderr)
+    return subprocess.CompletedProcess(argv, 1, "", reason)
 
 
 def tmux_session_alive() -> bool:
@@ -684,6 +717,15 @@ _PHONE_EVENT_LABELS = {
     "low_battery": "电量低",
 }
 
+# The advice lines rendered into the context tell CC how to pull the full event
+# texts itself. They deliberately ask for a bigger page than the routine fetch
+# (limit=20 vs the configured 12), but the host/port must not drift from the
+# URL the fetch actually uses — so derive them from CFG rather than retyping
+# localhost:3456.
+_PHONE_EVENT_FULL_HINT = (
+    f"curl '{CFG.phone_event_url.split('?', 1)[0]}?hours=48&limit=20'"
+)
+
 
 def _fetch_phone_events() -> str | None:
     """GET /phone-event from memory MCP. Returns a timeline block or None.
@@ -743,13 +785,10 @@ def _fetch_phone_events() -> str | None:
         teaser = (newest.get("detail") or "").replace("\n", " ")[:80]
         lines.append(
             f"- 屏幕分享 ×{len(shares)}（最新 {_when(newest)}:"
-            f"「{teaser}…」）想看全文: "
-            f"curl 'http://localhost:3456/phone-event?hours=48&limit=20'"
+            f"「{teaser}…」）想看全文: {_PHONE_EVENT_FULL_HINT}"
         )
     elif poked_with_screen:
-        lines.append(
-            "（poke 屏幕全文: curl 'http://localhost:3456/phone-event?hours=48&limit=20'）"
-        )
+        lines.append(f"（poke 屏幕全文: {_PHONE_EVENT_FULL_HINT}）")
     return "\n".join(lines) if len(lines) > 1 else None
 
 
@@ -961,20 +1000,29 @@ def build_contexts() -> tuple[str, str]:
 
 # ---------- one cycle ----------
 
-def one_cycle() -> bool:
-    """Run one wakeup cycle. Returns True if injection succeeded."""
+def one_cycle() -> tuple[datetime, str] | None:
+    """Run one wakeup cycle.
+
+    Returns (planned_wake, mode) — the absolute time main() should sleep to,
+    committed here so the context footer cannot disagree with it — or None if
+    the cycle failed (no tmux session, or the send-keys did not land), which
+    keeps the old falsy return as the failure signal.
+    """
     global _planned_next_wakeup
     print(f"[{_stamp()}] === wakeup cycle start ===")
 
     if not tmux_session_alive():
         print(f"[{_stamp()}] tmux session '{TMUX_SESSION}' not found!",
               file=sys.stderr)
-        return False
+        return None
 
-    # Pre-calculate the tentative next wakeup so build_contexts can show it
-    sleep_secs, _ = calc_sleep_seconds()
-    tentative_wake = datetime.now() + timedelta(seconds=sleep_secs)
-    _planned_next_wakeup = tentative_wake.strftime("%Y-%m-%d %H:%M")
+    # Commit to the next wakeup here, once, so build_contexts can print it and
+    # main() can sleep to it. It is an absolute time, not a duration: whatever
+    # the rest of this cycle spends in wait_for_idle (up to 10 min), CC's own
+    # turn, and maybe_compact is subtracted from the wait instead of being
+    # added on top of it, which is what 预计下次唤醒 has always claimed.
+    planned_wake, mode = plan_next_wakeup()
+    _planned_next_wakeup = planned_wake.strftime("%Y-%m-%d %H:%M")
 
     # Build context and write to file
     print(f"[{_stamp()}] building context...")
@@ -1002,7 +1050,7 @@ def one_cycle() -> bool:
         print(f"[{_stamp()}] tmux send-keys failed!", file=sys.stderr)
 
     print(f"[{_stamp()}] === wakeup cycle done ===")
-    return ok
+    return (planned_wake, mode) if ok else None
 
 
 # ---------- sleep ----------
@@ -1021,17 +1069,25 @@ def calc_sleep_seconds() -> tuple[int, str]:
     return random.randint(CFG.day_min_minutes * 60, CFG.day_max_minutes * 60), "day"
 
 
-def read_wakeup_override() -> datetime | None:
-    """Read and consume the CC-written override file.
+def read_wakeup_override(consume: bool = True) -> datetime | None:
+    """Read the CC-written override file.
 
-    Returns a future datetime if valid, None otherwise. The file is always
-    deleted after reading (one-shot).
+    Returns a future datetime if valid, None otherwise. With consume=True (the
+    default) the file is deleted as soon as it is read — the override is
+    one-shot, and main() is the one that consumes it after CC's turn.
+
+    consume=False is a look-ahead used by plan_next_wakeup(): the context
+    footer has to name the same wake time main() will actually sleep to, so it
+    needs to see a pending override without swallowing it. Peeks stay silent
+    (no logging, no deleting an unparsable file) so that the real, consuming
+    read is still the one that reports and cleans up.
     """
     if not WAKEUP_OVERRIDE_FILE.exists():
         return None
     try:
         raw = WAKEUP_OVERRIDE_FILE.read_text(encoding="utf-8-sig").strip()
-        WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
+        if consume:
+            WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
         if not raw:
             return None
         # Accept YYYY-MM-DD HH:MM or YYYY.MM.DD HH:MM
@@ -1039,20 +1095,45 @@ def read_wakeup_override() -> datetime | None:
         dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
         now = datetime.now()
         if dt <= now:
-            print(f"[{_stamp()}] override {raw} is in the past, ignoring")
+            if consume:
+                print(f"[{_stamp()}] override {raw} is in the past, ignoring")
             return None
         secs = (dt - now).total_seconds()
         if secs < 60:
-            print(f"[{_stamp()}] override {raw} is less than 1 minute away, ignoring")
+            if consume:
+                print(f"[{_stamp()}] override {raw} is less than 1 minute away, ignoring")
             return None
         return dt
     except (ValueError, OSError) as e:
-        print(f"[{_stamp()}] override file invalid: {e}", file=sys.stderr)
-        try:
-            WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if consume:
+            print(f"[{_stamp()}] override file invalid: {e}", file=sys.stderr)
+            try:
+                WAKEUP_OVERRIDE_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass
         return None
+
+
+def plan_next_wakeup() -> tuple[datetime, str]:
+    """Decide, once, when the next cycle should start.
+
+    Returns an absolute wake time rather than a duration. The random day
+    interval is drawn exactly here, so the number written into the context
+    footer and the number main() sleeps to are the same draw — before this,
+    one_cycle() drew one interval to render 预计下次唤醒 and main() drew a
+    second, independent one to sleep on, and the footer was routinely ~10 min
+    off from reality.
+
+    A pending override (someone wrote next_wakeup.txt in the last seconds of
+    the previous sleep, after sleep_with_interrupt's final poll) wins over the
+    draw, and is only peeked at here — main() consumes it for real once CC's
+    turn is over.
+    """
+    pending = read_wakeup_override(consume=False)
+    if pending:
+        return pending, "cc-override"
+    secs, mode = calc_sleep_seconds()
+    return datetime.now() + timedelta(seconds=secs), mode
 
 
 def deliver_urgent_messages() -> None:
@@ -1066,49 +1147,74 @@ def deliver_urgent_messages() -> None:
     """
     try:
         conn = sqlite3.connect(str(MEMORY_DB), timeout=SQLITE_TIMEOUT)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
-        rows = conn.execute(
-            "SELECT id, created_at, source, message FROM backend_inbox "
-            "WHERE status = 'pending' AND priority = 'urgent' ORDER BY id ASC"
-        ).fetchall()
     except sqlite3.Error:
         return
 
-    if not rows:
-        conn.close()
-        return
+    # Everything past the connect runs under try/finally. This function fires
+    # every OVERRIDE_RECHECK_INTERVAL seconds all day; the old code shared one
+    # try with the SELECT and returned without closing whenever that raised —
+    # e.g. against an older memory.db whose backend_inbox has no `priority`
+    # column, which leaks a handle every 30s for as long as the injector runs.
+    try:
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 5000")
+            rows = conn.execute(
+                "SELECT id, created_at, source, message FROM backend_inbox "
+                "WHERE status = 'pending' AND priority = 'urgent' ORDER BY id ASC"
+            ).fetchall()
+        except sqlite3.Error:
+            # table missing (old DB) or no `priority` column yet
+            return
 
-    if not is_cc_idle():
-        print(f"[{_stamp()}] urgent message(s) waiting but CC busy; will retry")
-        conn.close()
-        return
+        if not rows:
+            return
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    for r in rows:
-        when = _utc_to_local_str(r["created_at"] or "")
-        src = r["source"] or "unknown"
-        # tmux send-keys treats newlines as submits — flatten to one line
-        msg = " / ".join(
-            part.strip() for part in (r["message"] or "").splitlines()
-            if part.strip()
-        )
-        text = (f"[紧急插播 · 来自 {src} · {when}] {msg} "
-                f"（此消息走即时通道直达，nudge_context.md "
-                f"未刷新，处理完不用管收件箱。）")
-        if tmux_send(text):
-            conn.execute(
-                "UPDATE backend_inbox SET status='seen', seen_at=? WHERE id=?",
-                (now_iso, r["id"]),
+        if not is_cc_idle():
+            print(f"[{_stamp()}] urgent message(s) waiting but CC busy; will retry")
+            return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for r in rows:
+            when = _utc_to_local_str(r["created_at"] or "")
+            src = r["source"] or "unknown"
+            # tmux send-keys treats newlines as submits — flatten to one line
+            msg = " / ".join(
+                part.strip() for part in (r["message"] or "").splitlines()
+                if part.strip()
             )
-            conn.commit()
-            print(f"[{_stamp()}] urgent #{r['id']} from {src} injected into CC")
-            time.sleep(2)  # let CC's input settle between messages
-        else:
-            print(f"[{_stamp()}] urgent #{r['id']} tmux send failed; stays pending",
-                  file=sys.stderr)
-            break
-    conn.close()
+            text = (f"[紧急插播 · 来自 {src} · {when}] {msg} "
+                    f"（此消息走即时通道直达，nudge_context.md "
+                    f"未刷新，处理完不用管收件箱。）")
+            if tmux_send(text):
+                # The message is already on CC's screen; only the bookkeeping
+                # can still fail (db locked by the MCP writer, disk full, WAL
+                # trouble). That must not escape — this whole function runs
+                # from sleep_with_interrupt, outside main()'s try/except, so a
+                # raise here kills the injector and CC stops being woken at
+                # all. Stop after logging rather than continuing: a write
+                # failure is about the connection, not this row, so the next
+                # row would fail identically and get double-delivered too.
+                try:
+                    conn.execute(
+                        "UPDATE backend_inbox SET status='seen', seen_at=? WHERE id=?",
+                        (now_iso, r["id"]),
+                    )
+                    conn.commit()
+                except sqlite3.Error as e:
+                    print(f"[{_stamp()}] urgent #{r['id']} was injected but could "
+                          f"NOT be marked seen ({e}) — it stays pending and will "
+                          f"be delivered again; stopping this round",
+                          file=sys.stderr)
+                    break
+                print(f"[{_stamp()}] urgent #{r['id']} from {src} injected into CC")
+                time.sleep(2)  # let CC's input settle between messages
+            else:
+                print(f"[{_stamp()}] urgent #{r['id']} tmux send failed; stays pending",
+                      file=sys.stderr)
+                break
+    finally:
+        conn.close()
 
 
 def sleep_with_interrupt(seconds: float) -> None:
@@ -1178,6 +1284,21 @@ def _disable_console_quick_edit() -> None:
 
 
 def main() -> int:
+    # Parse arguments before anything else. argparse exits the process on
+    # --help or a bad flag, and it used to do that last of all — after the log
+    # was opened and stamped "injector started", after the singleton bind, and
+    # after both incremental-render state files were unlinked. So with no
+    # daemon running, `py nudge_inject.py --help` wiped context_state.json and
+    # memory_state.json on its way to printing usage; with a daemon running it
+    # lost the bind and printed "already running" instead of the help text.
+    # --once stays behind the lock exactly as before: only the parsing moved,
+    # the cycle loop did not.
+    parser = argparse.ArgumentParser(
+        description="Periodic wakeup injector for tmux-hosted nudge agent")
+    parser.add_argument("--once", action="store_true",
+                        help="Inject once and exit")
+    args = parser.parse_args()
+
     _disable_console_quick_edit()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1282,12 +1403,6 @@ def main() -> int:
     except OSError:
         pass
 
-    parser = argparse.ArgumentParser(
-        description="Periodic wakeup injector for tmux-hosted nudge agent")
-    parser.add_argument("--once", action="store_true",
-                        help="Inject once and exit")
-    args = parser.parse_args()
-
     global _wakeup_source
 
     signal.signal(signal.SIGINT, _sigint)
@@ -1308,8 +1423,9 @@ def main() -> int:
     while not _stop:
         cycle += 1
         print(f"\n[{_stamp()}] ----- cycle #{cycle} -----")
+        plan = None
         try:
-            one_cycle()
+            plan = one_cycle()
         except Exception as e:
             import traceback
             print(f"[{_stamp()}] cycle crashed: {e}", file=sys.stderr)
@@ -1331,20 +1447,42 @@ def main() -> int:
         # Periodic history compaction, now that CC has finished its turn
         maybe_compact()
 
-        # Check for CC override
+        # Check for a CC override written during the turn we just triggered.
+        # It still beats the interval committed in one_cycle — CC only learns
+        # it wants a different wake time after reading the context.
         override_dt = read_wakeup_override()
         if override_dt:
-            sleep_secs = int((override_dt - datetime.now()).total_seconds())
-            wake = override_dt
-            mode = "cc-override"
+            wake, mode = override_dt, "cc-override"
             _wakeup_source = "你上次自定义的"
             print(f"[{_stamp()}] CC override accepted → "
                   f"next wakeup at {wake:%Y-%m-%d %H:%M}")
+        elif plan is not None:
+            wake, mode = plan
+            _wakeup_source = "你上次自定义的" if mode == "cc-override" else "随机"
         else:
-            sleep_secs, mode = calc_sleep_seconds()
-            wake = datetime.now() + timedelta(seconds=sleep_secs)
+            # The cycle never got as far as committing a plan (no tmux
+            # session, or send-keys failed). Nothing was promised to CC, so
+            # draw a fresh interval anchored to now — same fallback cadence
+            # the loop has always used after a failed cycle.
+            wake, mode = plan_next_wakeup()
             _wakeup_source = "随机"
+            print(f"[{_stamp()}] cycle produced no plan — falling back to a fresh draw")
 
+        # Sleep to the committed wall-clock time, not for a fresh duration:
+        # the minutes already burned in wait_for_idle / CC's turn / maybe_
+        # compact come off the wait, so the footer's 预计下次唤醒 and the line
+        # below name the same moment.
+        raw_secs = int((wake - datetime.now()).total_seconds())
+        sleep_secs = max(MIN_SLEEP_SECONDS, raw_secs)
+        if sleep_secs != raw_secs:
+            # The turn outran the interval committed at the top of the cycle.
+            # Say so out loud: the footer CC already read named the earlier
+            # time, and only the log can explain why the wake is later.
+            print(f"[{_stamp()}] floor applied: committed wake was "
+                  f"{raw_secs}s away (turn outran the interval) — "
+                  f"sleeping {MIN_SLEEP_SECONDS // 60} min instead; "
+                  f"the context footer's 预计下次唤醒 is stale by that much")
+            wake = datetime.now() + timedelta(seconds=sleep_secs)
         print(f"[{_stamp()}] sleeping {sleep_secs//60} min ({mode}) — "
               f"next cycle at {wake:%H:%M:%S}")
         sleep_with_interrupt(sleep_secs)
