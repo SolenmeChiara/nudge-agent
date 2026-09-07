@@ -221,9 +221,10 @@ def md_to_html(md):
 def build_page(title, body_html, meta):
     return ("<!doctype html><html><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,"
-            "initial-scale=1\"><style>%s</style></head><body>"
+            "initial-scale=1\"><title>%s</title><style>%s</style></head><body>"
             "<div class=\"wrap\"><div class=\"meta\">%s</div>%s</div>"
-            "</body></html>" % (CSS, html.escape(meta), body_html))
+            "</body></html>"
+            % (html.escape(title), CSS, html.escape(meta), body_html))
 
 
 def main():
@@ -273,7 +274,7 @@ def main():
                            subtype="markdown", filename=name)
 
     with smtplib.SMTP_SSL(CFG.peek_smtp_host, CFG.peek_smtp_port,
-                          local_hostname="localhost") as s:
+                          local_hostname="localhost", timeout=30) as s:
         s.login(user, pw)
         s.send_message(msg)
     print("已发送「%s」→ %s（正文 %.1f KB%s）"

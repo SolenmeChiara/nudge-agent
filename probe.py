@@ -27,17 +27,25 @@ import json
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
+# 延迟配置导入：探针可能从其它目录被调起，config 拿不到就用内置默认值，
+# 不能因为读不到配置就整个探不成。
+try:
+    from config import CFG as _CFG
+except Exception:
+    _CFG = None
+
 WINPY = "/mnt/c/Python313/python.exe"
 PCSTAT = "D:/ClaudeExtentions/MCP/nudge-agent/pc_status.py"   # 必须 Windows 式路径
-PHONE_API = "http://localhost:3456/phone-status"
-LOCAL = timezone(timedelta(hours=-4))   # EDT；换季改成 -5
+PHONE_API = _CFG.phone_status_url if _CFG else "http://localhost:3456/phone-status"
+LOCAL = ZoneInfo("America/Toronto")   # 不写死偏移：写死的 -4 到 11/1 冬令时会整体快一小时
 
 
 def _ago(ts_utc):

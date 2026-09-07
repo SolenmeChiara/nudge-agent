@@ -33,8 +33,10 @@ DEFAULT_DIR = Path("/mnt/d/ClaudeExtentions/MCP/nudge-agent/mind/Claude_photos/r
 
 
 def wsl_to_win(p: Path) -> str:
+    """/mnt/d/x → D:/x。s[6] == "/" 是盘符闸门：少了它 /mnt/wslg/x.jpg
+    会被削成 W:slg/x.jpg（与 grab_video.win_path 同一道守卫）。"""
     s = str(p)
-    if s.startswith("/mnt/") and len(s) > 6:
+    if s.startswith("/mnt/") and len(s) > 6 and s[6] == "/":
         return f"{s[5].upper()}:{s[6:]}"
     return s
 

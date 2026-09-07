@@ -377,28 +377,6 @@ def format_block(convs: list[dict] | None, error_msg: str | None,
     return "\n".join(lines)
 
 
-def fetch(limit: int = 10) -> str:
-    """Convenience wrapper that returns a ready-to-paste markdown block."""
-    # For the count footer we'd need the un-truncated length — refetch is wasteful,
-    # so just call fetch_raw with a large limit and slice.
-    key = _load_env_var("CLAUDE_SESSION_KEY")
-    if not key:
-        return "## 最近 Claude.ai 对话\n\n(无 CLAUDE_SESSION_KEY，跳过此上下文)\n"
-    status, orgs = _get("/organizations", key)
-    if status != 200 or not isinstance(orgs, list):
-        return f"## 最近 Claude.ai 对话\n\n(获取 organizations 失败：HTTP {status})\n"
-    org = _pick_main_org(orgs)
-    if not org:
-        return "## 最近 Claude.ai 对话\n\n(没有 chat-capable organization)\n"
-    org_uuid = org["uuid"]
-    status, convs = _get(f"/organizations/{org_uuid}/chat_conversations", key)
-    if status != 200 or not isinstance(convs, list):
-        return f"## 最近 Claude.ai 对话\n\n(获取 conversations 失败：HTTP {status})\n"
-    convs.sort(key=lambda c: c.get("updated_at") or c.get("created_at") or "",
-               reverse=True)
-    return format_block(convs[:limit], None, total_count=len(convs))
-
-
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

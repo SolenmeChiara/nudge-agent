@@ -14,7 +14,6 @@
   "peek_mail_subject": "sol-PEEK",
   "doc_mail_to": "",
   "tmux_session": "nudge-agent",
-  "min_nudge_gap_minutes": 20,
   "day_min_minutes": 20,
   "day_max_minutes": 60,
   "night_hours": 3

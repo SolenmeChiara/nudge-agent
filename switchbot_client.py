@@ -1,15 +1,17 @@
-"""SwitchBot cloud OpenAPI v1.1 client (Color Bulb control).
+"""SwitchBot cloud OpenAPI v1.1 client.
 
-The point: backstage Claude calls a function and the lamp reacts —
-wake signal, come-home / bedtime scenes, a night-watch status light.
+实际用到的只有两件事：读 Hub 2 的室内环境（温度 / 湿度 / 光照等级，
+上限 20），以及用通用的 send_command 推 Curtain3 开合。config.json 里
+那个 switchbot_device_id 指的就是 Hub 2；床头灯是 Hue，走 hue_client.py，
+不从这里过。
 
 Design contract (this is a self-driving backstage script, so it must
 NEVER crash the caller):
 
   * Every public method returns a structured dict. Success looks like
     {'ok': True, ...}; failure looks like {'ok': False, 'error': ...}.
-    No exceptions escape to the caller — the lamp is nice-to-have, not
-    a critical path, so we degrade silently instead of dying.
+    No exceptions escape to the caller — these devices are nice-to-have,
+    not a critical path, so we degrade silently instead of dying.
   * Success is judged by the response envelope's body statusCode == 100,
     NOT the HTTP status (which can be 200 while statusCode says 161).
   * The signature is recomputed on every request (t + nonce change each
@@ -31,15 +33,15 @@ Config: reads CFG.switchbot_token / switchbot_secret / switchbot_device_id
 / switchbot_base_url. Empty token or secret -> every public method returns
 a clear "not configured" error instead of blowing up.
 
-CLI (for hands-on acceptance once a real token is pasted in):
-    python3 switchbot_client.py devices
-    python3 switchbot_client.py status
-    python3 switchbot_client.py on
-    python3 switchbot_client.py off
-    python3 switchbot_client.py toggle
-    python3 switchbot_client.py brightness 60
-    python3 switchbot_client.py color 122 80 20
-    python3 switchbot_client.py temp 3000
+CLI：
+    python3 switchbot_client.py devices   列设备，拿 deviceId
+    python3 switchbot_client.py status    默认设备（Hub 2）的环境读数
+窗帘没有子命令，直接调库：send_command(<curtain id>, "turnOn"/"turnOff")，
+或 send_command(<curtain id>, "setPosition", "0,ff,50")，0=全开 100=全关。
+
+Legacy／未接线：on / off / toggle / brightness / color / temp 这几条子命令
+和 resolve_bulb_id() 是给 SwitchBot Color Bulb 写的，现场并没有这只灯泡，
+对着 Hub 2 发只会被云端退回。代码留着，将来真买了再用。
 """
 
 from __future__ import annotations

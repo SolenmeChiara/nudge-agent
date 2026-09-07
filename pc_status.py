@@ -55,6 +55,8 @@ def _idle_seconds() -> float | None:
 
 
 def _fmt_idle(seconds: float) -> str:
+    # 措辞是契约：sentry.sh:82-97 拿正则啃这三行的中文原样（「刚刚」/
+    # 「N 分钟」/「N 小时 N 分」），改字面就等于让哨兵的 idle 恒读 -1。
     if seconds < 60:
         return "刚刚有操作（<1 分钟）"
     minutes = int(seconds // 60)

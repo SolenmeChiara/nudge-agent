@@ -112,7 +112,14 @@ try:
 except Exception:
     print('X X X X X')
 " 2>/dev/null)"
-  [ "$lock" = "X" ] && { sleep 60; continue; }
+  # X = curl/JSON 整帧失败；None = 上报里那个字段本身缺值。两者一样不可比：
+  # logs/sentry.log 19:45 那帧拿 lock=None 做了基线，下一帧「None→0」就是必然的误报。
+  # 所以不做基线、不参与比较，睡一轮重取。
+  case "$lock" in X|None) sleep 60; continue;; esac
+  case "$bat" in X|None) sleep 60; continue;; esac
+  # chg 同理：battery_charging 缺值时上一帧的 None 会让下一帧「None→False」翻转报警。
+  # home/upd 不用管：一个是本地算出来的 0/1，一个是切片，都不会是 None。
+  case "$chg" in X|None) sleep 60; continue;; esac
 
   cur_fsig=$(fsig)
 

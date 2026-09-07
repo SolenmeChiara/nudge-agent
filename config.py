@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,9 +50,11 @@ class Config:
     # shortcut. Real address lives in config.json only (gitignored).
     doc_mail_to: str = ""
 
-    # SwitchBot cloud API v1.1 (Color Bulb control).
-    # token/secret live in config.json only (gitignored); device_id is
-    # auto-resolved on first run or filled once known. Empty = "not
+    # SwitchBot cloud API v1.1. device_id is the Hub 2 (indoor temp /
+    # humidity / light level) — the default target of `status`. The
+    # Curtain3 is driven by passing its own device id to
+    # switchbot_client.send_command; the bedside lamp is Hue, not this.
+    # token/secret live in config.json only (gitignored). Empty = "not
     # configured" -> switchbot_client degrades gracefully.
     switchbot_token: str = ""
     switchbot_secret: str = ""
@@ -61,9 +62,13 @@ class Config:
     switchbot_base_url: str = "https://api.switch-bot.com"
 
     # Philips Hue Bridge, local CLIP v2 API (LAN HTTPS, self-signed cert).
-    # bridge_ip/application_key live in config.json only (gitignored);
-    # both are written by hue_pair.py during button pairing. Empty =
-    # "not configured" -> hue_client degrades gracefully.
+    # bridge_ip/application_key/client_key live in config.json only
+    # (gitignored); they came out of a one-off link-button pairing against
+    # the bridge — the pairing script is no longer in the repo, so to
+    # re-pair you press the link button and POST to the bridge by hand.
+    # Empty = "not configured" -> hue_client degrades gracefully.
+    # client_key is the Entertainment-API streaming secret: unused by
+    # hue_client.py today, kept because config.json carries it.
     hue_bridge_ip: str = ""
     hue_application_key: str = ""
     hue_client_key: str = ""
@@ -72,11 +77,7 @@ class Config:
     # tmux session name
     tmux_session: str = "nudge-agent"
 
-    # Claude.ai session key env var name (the key itself lives in .env)
-    claude_session_key_env: str = "CLAUDE_SESSION_KEY"
-
     # Timing
-    min_nudge_gap_minutes: int = 20
     day_min_minutes: int = 20
     day_max_minutes: int = 60
     night_hours: int = 3
@@ -86,9 +87,6 @@ class Config:
     recent_top_n: int = 6
     high_importance_top_n: int = 5
     prior_nudge_top_n: int = 3
-    content_top_n: int = 5
-    tail_messages: int = 3
-    tail_text_limit: int = 200
 
 
 def _load_config() -> Config:

@@ -14,8 +14,12 @@ backstage script, so it must NEVER crash the caller):
     a critical path, so we degrade instead of dying.
   * The Bridge speaks HTTPS with a self-signed cert -> verify=False and
     the InsecureRequestWarning is silenced on purpose (LAN only).
-  * Auth is one header: hue-application-key (obtained once via the
-    physical link button by hue_pair.py; stored in config.json).
+  * Auth is one header: hue-application-key. It was minted once by a
+    link-button pairing against the bridge and lives in config.json;
+    the pairing script that did it is no longer in the repo, so a
+    re-pair means pressing the link button and POSTing to the bridge
+    by hand (POST https://<bridge>/api {"devicetype":"...",
+    "generateclientkey":true}).
 
 API cheatsheet (v2, base https://<bridge>/clip/v2):
     GET  /resource/light            list lights (each has a UUID rid)
@@ -65,8 +69,9 @@ def _not_configured() -> dict | None:
         return {
             "ok": False,
             "error": "hue not configured: hue_bridge_ip / hue_application_key "
-                     "missing in config.json (run hue_pair.py with the link "
-                     "button pressed)",
+                     "missing in config.json (re-pair by hand: press the "
+                     "bridge link button, then POST /api to the bridge — "
+                     "the old hue_pair.py is gone)",
         }
     return None
 

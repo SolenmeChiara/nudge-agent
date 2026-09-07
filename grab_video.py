@@ -351,6 +351,9 @@ def main() -> int:
     def build_dl(extra):
         return [
             ytdlp, *no_playlist, *extra, "--no-warnings",
+            # 与上面探测那次同一个值。只卡单次 socket 读写，不是整段下载的
+            # 墙钟上限——长视频本来就该慢慢下。
+            "--socket-timeout", "20",
             "-f", fmt,
             "--merge-output-format", "mp4",
             "--concurrent-fragments", "4",

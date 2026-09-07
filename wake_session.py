@@ -16,7 +16,6 @@
 默认文案与注入器一致，收件人看不出是谁叫的。
 """
 import os
-import re
 import sys
 import time
 import glob
