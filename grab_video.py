@@ -12,6 +12,12 @@ B 站从 2026-09-04 起会对没带 cookie 的裸请求回 412（风控），默
 连上 9222 端口那个常开的 Windows Chrome，把登录态 cookie 导出来，
 配上 Chrome 的 UA 和 referer 重试；还 412 就睡 4 秒再试最后一次。
 
+抖音（v.douyin.com 短链或 www.douyin.com/video/... 页）走专线，不经 yt-dlp：
+它的提取器 2026-09 起要新鲜 cookie 还是 403。专线做法是连 9222 的 Chrome
+打开视频页，先读 DOM 里 video/source 的真实地址，读不到再从网络流量里捞
+douyinvod/zjcdn 的响应地址，拿到就在同一趟里立刻用 curl 下——直链带签名
+时效，存着后用会过期。--height 对抖音无效（播放器给什么拿什么）。
+
 环境变量 GRAB_VIDEO_CACHE 可以改缓存目录（测试用，平时不用管）。
 同一个视频抓过就不再抓，直接把已缓存的路径吐出来。
 最后会同时打印 WSL 路径和 Windows 路径 —— 后者可以直接喂给 gemini-video MCP。
@@ -46,6 +52,14 @@ CHROME_UA = (
 BILI_REFERER = "https://www.bilibili.com/"
 RETRY_SLEEP = 4  # 风控是随机的，同一条命令睡几秒再来往往就过了
 
+DOUYIN_REFERER = "https://www.douyin.com/"
+DOUYIN_COOKIE_FILE = Path.home() / ".cache" / "nudge-agent" / "douyin_cookies.txt"
+# 解抖音短链用移动端 UA，桌面 UA 有时被引去落地页而不是重定向
+MOBILE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+)
+
 
 def normalize(url: str) -> str:
     """B 站链接一律削成干净的 BV 页。
@@ -57,6 +71,18 @@ def normalize(url: str) -> str:
     """
     if re.fullmatch(r"BV[0-9A-Za-z]{10}", url):
         return f"https://www.bilibili.com/video/{url}"
+    if "douyin.com" in url:
+        # 抖音也削成干净的视频页；短链（v.douyin.com）先展开
+        m = re.search(r"/video/(\d+)", url)
+        if not m:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": MOBILE_UA})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    url = r.url
+                m = re.search(r"/video/(\d+)", url)
+            except Exception as e:
+                print(f"抖音短链没解开（{e}）")
+        return f"https://www.douyin.com/video/{m.group(1)}" if m else url
     if "bilibili.com" not in url and "b23.tv" not in url:
         return url  # 别的站交给 yt-dlp 自己认
 
@@ -81,6 +107,10 @@ def normalize(url: str) -> str:
 
 def is_bili(url: str) -> bool:
     return "bilibili.com" in url or "b23.tv" in url
+
+
+def is_douyin(url: str) -> bool:
+    return "douyin.com" in url
 
 
 def win_path(p: Path) -> str:
@@ -164,9 +194,9 @@ def export_cookies(page_url: str) -> Path | None:
         return None
 
 
-def _write_netscape(cookies: list) -> None:
-    """写成 yt-dlp 认的 Netscape 格式，权限 0600，每次覆盖。"""
-    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _write_netscape(cookies: list, path: Path = COOKIE_FILE) -> None:
+    """写成 yt-dlp/curl 认的 Netscape 格式，权限 0600，每次覆盖。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# Netscape HTTP Cookie File"]
     for c in cookies:
         dom = c["domain"]
@@ -184,10 +214,10 @@ def _write_netscape(cookies: list) -> None:
                 ]
             )
         )
-    fd = os.open(COOKIE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    os.chmod(COOKIE_FILE, 0o600)  # 文件本来就在的话 O_CREAT 的 mode 不生效
+    os.chmod(path, 0o600)  # 文件本来就在的话 O_CREAT 的 mode 不生效
 
 
 class BiliAuth:
@@ -216,6 +246,118 @@ class BiliAuth:
             "--referer", BILI_REFERER,
         ]
         return self._args
+
+
+def douyin_grab(url: str, args) -> int:
+    """抖音专线，不经 yt-dlp（它的提取器要新鲜 cookie 还是 403，弃）。
+
+    管线是 9/8 两个循环各验通一半后合的：连 9222 的 Chrome 开视频页，
+    先读 DOM 里 video/source 的 src（不带 cookie、只配 UA＋referer 就能下），
+    src 是 blob: 或没挂出来时退到网络流量里捞 douyinvod/zjcdn 的响应地址。
+    直链带签名时效，捞到必须同一趟里立刻下，不能存着后用。
+    """
+    m = re.search(r"/video/(\d+)", url)
+    vid = m.group(1) if m else "unknown"
+    stem = args.name or f"douyin_{vid}"
+
+    hit = next((p for p in CACHE.glob(f"{stem}.*") if p.suffix != ".part"), None)
+    if hit and not args.force:
+        print(f"已经在缓存里了（{human(hit.stat().st_size)}），没重抓。")
+        print(f"WSL     ：{hit}")
+        print(f"Windows ：{win_path(hit)}")
+        return 0
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("没装 playwright，抖音管线走不了。装：pip install playwright", file=sys.stderr)
+        return 1
+
+    net_urls: list = []
+    dom_srcs: list = []
+    title, dur, ua, cookies = "", 0, chrome_ua(), []
+    print(f"开 {url} ...")
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.connect_over_cdp(CDP)
+        except Exception:
+            print("9222 的 Chrome 没开，抖音管线离不开它", file=sys.stderr)
+            return 2
+        if not browser.contexts:
+            print("9222 的 Chrome 没有可用的窗口", file=sys.stderr)
+            return 2
+        ctx = browser.contexts[0]
+        page = ctx.new_page()
+
+        def on_resp(r):
+            u = r.url
+            ct = r.headers.get("content-type") or ""
+            if "douyinvod" in u or "zjcdn" in u or ct.startswith("video/"):
+                net_urls.append(u)
+
+        page.on("response", on_resp)
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            time.sleep(8)  # 等播放器起来、真实地址挂进 DOM
+            dom_srcs = page.evaluate(
+                "() => [...document.querySelectorAll('video, video source')]"
+                ".map(v => v.src).filter(Boolean)"
+            ) or []
+            dur = page.evaluate(
+                "() => { const v = document.querySelector('video');"
+                " return v && isFinite(v.duration) ? v.duration : 0; }"
+            ) or 0
+            title = page.title() or ""
+            ua = page.evaluate("navigator.userAgent") or ua
+            cookies = ctx.cookies(["https://www.douyin.com"])
+        finally:
+            try:
+                page.close()  # 只关自己开的这一页
+            except Exception:
+                pass
+
+    title = re.sub(r"\s*-\s*抖音.*$", "", title.strip())
+    if title:
+        print(f"《{title}》")
+    dur = int(dur)
+    if dur:
+        print(f"时长：{dur // 60}:{dur % 60:02d}")
+    if dur > MAX_MIN * 60 and not args.force:
+        print(f"\n比 {MAX_MIN} 分钟长，先没抓。真要的话加 --force。", file=sys.stderr)
+        return 3
+
+    # DOM 的 src 是最干净的直链，排前面；blob: 是播放器内部句柄，下不了
+    candidates = [u for u in dom_srcs if u.startswith("http")] + net_urls
+    if not candidates:
+        print("DOM 和网络流量里都没捞到视频地址（登录墙？页面没放出来？）", file=sys.stderr)
+        return 4
+
+    cookie_args: list = []
+    if cookies:
+        _write_netscape(cookies, DOUYIN_COOKIE_FILE)
+        cookie_args = ["-b", str(DOUYIN_COOKIE_FILE)]
+
+    out = CACHE / f"{stem}.mp4"
+    ok = False
+    for cand in dict.fromkeys(candidates):  # 去重保序
+        print(f"\n下 {cand[:110]} ...")
+        proc = run([
+            "curl", "-fSL", "--retry", "2", "-o", str(out),
+            "-A", ua, "-e", DOUYIN_REFERER, *cookie_args, cand,
+        ])
+        # 太小的多半是错误页伪装的，不算数
+        if proc.returncode == 0 and out.exists() and out.stat().st_size > 100_000:
+            ok = True
+            break
+        out.unlink(missing_ok=True)
+    if not ok:
+        print("候选地址都没下成。", file=sys.stderr)
+        return 4
+
+    print(f"\n好了：{human(out.stat().st_size)}")
+    print(f"WSL     ：{out}")
+    print(f"Windows ：{win_path(out)}")
+    return 0
 
 
 def run_ytdlp(build_cmd, auth: BiliAuth, runner):
@@ -279,6 +421,11 @@ def main() -> int:
 
     url = normalize(args.target.strip())
     CACHE.mkdir(parents=True, exist_ok=True)
+
+    if is_douyin(url):
+        if args.chrome_cookies is not None:
+            print("--chrome-cookies 开关只对 B 站有意义，抖音管线自己处理 cookie。")
+        return douyin_grab(url, args)
 
     bili = is_bili(url)
     if args.chrome_cookies and not bili:
