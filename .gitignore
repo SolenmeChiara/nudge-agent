@@ -52,3 +52,4 @@ archive/bak/
 
 # Pre-compact handover notes between CC sessions; the tidy sweeps them into mind/handovers/
 handover_*.md
+.secrets/
