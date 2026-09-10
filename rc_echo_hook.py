@@ -32,9 +32,10 @@ import sys
 import time
 import urllib.request
 
-NTFY_URL = "https://ntfy.sh/"
+NTFY_URL = "http://127.0.0.1:8091/"
 NTFY_TOPIC = "sol-nudge-private"
-NTFY_MARKER = "ntfy.sh/sol-nudge-private"
+# 按 topic 名匹配：手动 curl 不论发 ntfy.sh 还是自建 :8091 都算「本回合已推过」
+NTFY_MARKER = "sol-nudge-private"
 TIMEOUT = 6
 # Stop 触发时本回合的 assistant 条目可能还没落盘，等这么久重读几次
 RETRY_TIMES = 3
@@ -63,7 +64,8 @@ SKIP_PREFIXES = (
 MODEL_MAP = (
     ("fable-5-1", "fable5.1"),
     ("fable-5", "fable5"),
-    ("opus", "opus4.6"),
+    ("opus-4-6", "opus4.6"),
+    ("opus", "opus"),
     ("sonnet", "sonnet"),
 )
 
