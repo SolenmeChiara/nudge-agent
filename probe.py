@@ -6,6 +6,7 @@
     python3 probe.py pc         只看电脑
     python3 probe.py phone      只看手机
     python3 probe.py hr         只看心率
+    python3 probe.py ears       只看客厅耳朵（status.json + 最新整点摘要）
     python3 probe.py shot --yes 截一张手机屏（有痕，见下）
 
 设计原则全部来自当天的教训，每一条都对应一次真栽过的跟头：
@@ -151,6 +152,48 @@ def probe_hr():
     print("  ⚠️ step_count 更不能当活动探测：零值小时可能根本不上报。")
 
 
+def probe_ears():
+    """客厅耳朵。status.json 每 5 秒刷一次，文件停更 = 守护程序停了，不是屋里安静。"""
+    import os
+    print("## 客厅耳朵（ears）")
+    sj = "/mnt/d/ClaudeExtentions/Extention/ears/data/status.json"
+    try:
+        mtime = os.path.getmtime(sj)
+    except OSError:
+        print("  ⚠️ status.json 不存在——耳朵从没跑过，或数据目录挪了")
+        return
+    age_s = (datetime.now(timezone.utc)
+             - datetime.fromtimestamp(mtime, timezone.utc)).total_seconds()
+    alive = age_s < 60
+    print(f"  状态帧: {_fmt_ago(age_s / 60)}更新"
+          + ("" if alive else "  ⚠️ 停更（刷新周期 5s）——是守护程序没在跑，不是屋里安静"))
+    try:
+        with open(sj, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"  ⚠️ status.json 读不出来：{e}")
+        return
+    print(f"  麦克风静默 {d.get('mic_silent')}  底噪 {d.get('background_rms_dbfs')} dBFS")
+    c = d.get("counters") or {}
+    print(f"  今日计数: 人声 {c.get('speech')} 复杂 {c.get('complex')} "
+          f"其他 {c.get('sound')}  转写过闸 {c.get('whisper_ok')}/拦下 {c.get('whisper_dropped')}")
+    ls = d.get("last_summary") or {}
+    if ls.get("ts"):
+        try:
+            _, mins = _ago(datetime.fromisoformat(ls["ts"]).replace(tzinfo=LOCAL))
+            when = f"{_fmt_ago(mins)}"
+        except ValueError:
+            when = str(ls["ts"])
+        txt = " ".join(str(ls.get("text") or "").split())
+        if len(txt) > 100:
+            txt = txt[:100] + "…"
+        print(f"  最新摘要（{when}，窗口 {ls.get('window_start', '?')[-8:]}–"
+              f"{ls.get('window_end', '?')[-8:]}）: {txt or '（空）'}")
+    else:
+        print("  最新摘要: 还没有过")
+    print("  ⚠️ 摘要正文里的人声转写可能有同音字错误；类别标签是机器打的，仅供参考。")
+
+
 def probe_shot(confirmed):
     """截屏。有痕操作，必须显式确认。"""
     print("## 手机屏幕")
@@ -205,6 +248,8 @@ def main():
         probe_phone(); print()
     if what in ("all", "hr"):
         probe_hr(); print()
+    if what in ("all", "ears"):
+        probe_ears(); print()
     if what == "shot":
         probe_shot(yes)
 
