@@ -61,13 +61,8 @@ SKIP_PREFIXES = (
     "Another Claude session sent",
 )
 
-MODEL_MAP = (
-    ("fable-5-1", "fable5.1"),
-    ("fable-5", "fable5"),
-    ("opus-4-6", "opus4.6"),
-    ("opus", "opus"),
-    ("sonnet", "sonnet"),
-)
+# claude-opus-5-5 → opus5.5，claude-haiku-4-5-20251001 → haiku4.5；末尾日期戳不算版本
+MODEL_RE = re.compile(r"(fable|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -388,11 +383,11 @@ def short_model(assistants, chosen):
                 break
     if not raw:
         return "claude"
-    low = raw.lower()
-    for needle, short in MODEL_MAP:
-        if needle in low:
-            return short
-    return raw
+    m = MODEL_RE.search(raw.lower())
+    if not m:
+        return raw
+    family, major, minor = m.groups()
+    return family + major + ("." + minor if minor else "")
 
 
 def make_preview(text):
