@@ -19,6 +19,14 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+# Optional: pre-flight check for unresponsive tabs before touching CDP.
+try:
+    import cdp_precheck
+except ImportError:
+    cdp_precheck = None
 
 # Lazy config import — inject_claude.py can also run standalone from WSL
 # where config.json may not be on the Python path.
@@ -105,9 +113,24 @@ def inject(
     """
     result: dict = {"ok": False, "error": None, "url": None, "sent": False}
 
+    # connect_over_cdp attaches to every page target and waits for each one to
+    # initialise. A single tab whose renderer stopped answering DevTools
+    # commands ("dead page") hangs the whole connect until it times out, so
+    # check first and name the culprit instead of stalling. Never close tabs
+    # here — this is the user's own browser.
+    if cdp_precheck is not None:
+        dead = cdp_precheck.warn_if_dead(CDP_URL)
+        if dead:
+            urls = ", ".join(d["url"][:80] for d in dead)
+            result["error"] = (
+                f"Unresponsive Chrome tab(s) would hang CDP connect: {urls}. "
+                "Run: python3 cdp_precheck.py --close-dead"
+            )
+            return result
+
     with sync_playwright() as p:
         try:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
+            browser = p.chromium.connect_over_cdp(CDP_URL, timeout=15_000)
         except Exception as e:
             result["error"] = f"CDP connection failed: {e}"
             return result

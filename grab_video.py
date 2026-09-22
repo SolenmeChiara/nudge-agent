@@ -43,6 +43,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+import cdp_precheck  # 同目录的同伴模块：连 9222 之前先体检
+
 CACHE = Path(
     os.environ.get("GRAB_VIDEO_CACHE")
     or Path(__file__).resolve().parent / "mind" / "Claude_photos" / "video_cache"
@@ -72,7 +74,7 @@ MOBILE_UA = (
 XHS_HOSTS = ("xhslink.cn", "xhslink.com", "xiaohongshu.com")
 XHS_REFERER = "https://www.xiaohongshu.com/"
 XHS_NOTE = re.compile(r"/(?:explore|discovery/item|item)/([0-9A-Za-z]+)")
-CDP_TIMEOUT = 15000  # 毫秒。9222 的 HTTP 口活着但 websocket 挂死过（9/22），别裸等
+CDP_TIMEOUT = 15000  # 毫秒。真凶是哑页（见 cdp_precheck.py），但也别裸等
 PROBE_TIMEOUT = 90  # 秒。问元信息的墙钟上限，别让一条挂死的路拖住换路
 
 
@@ -319,6 +321,12 @@ def export_cookies(page_url: str) -> Path | None:
         print("没装 playwright，拿不到 cookie。装：pip install playwright", file=sys.stderr)
         return None
 
+    # connect_over_cdp 会 attach 所有标签页并等它们初始化，一个哑页就能拖死
+    # 整趟连接，所以连之前先体检一遍。发现哑页不连也不关 —— 那是 Sol 的浏览器。
+    if cdp_precheck.warn_if_dead(CDP):
+        print("先把哑页处理掉再来拿 cookie。", file=sys.stderr)
+        return None
+
     page = None
     try:
         with sync_playwright() as p:
@@ -455,6 +463,12 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
               file=sys.stderr)
         return 1, None
 
+    # 哑页会让 connect_over_cdp 挂到超时（见 cdp_precheck.py 的说明）。
+    # 与其白等十五秒，不如当场报出是哪一页，把这条路让给 yt-dlp。
+    if cdp_precheck.warn_if_dead(CDP):
+        print("Chrome 专线先跳过。", file=sys.stderr)
+        return 2, None
+
     net_urls: list = []
     dom_srcs: list = []
     title, dur, ua, cookies = "", 0, chrome_ua(), []
@@ -495,9 +509,12 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
                 except Exception:
                     pass
     except Exception as e:
-        # 9/22 实测：9222 的 HTTP 口回得好好的，websocket 却一直挂着不握手。
-        # 所以这里不光要接连不上，还要接超时和中途断线，接住了就换另一条路。
+        # 9/22 查清：HTTP 口回得好好的、connect 却挂死，是某个标签页的渲染进程
+        # 不再应答 DevTools 命令（哑页），上面的预检已经拦掉这一种。这里接的是
+        # 剩下的情况 —— 连不上、超时、中途断线，接住了就换另一条路。
         print(f"Chrome 专线没走通（{type(e).__name__}: {e}）", file=sys.stderr)
+        print("如果是连接挂死，跑 python3 cdp_precheck.py 看看是哪页的问题。",
+              file=sys.stderr)
         return 2, None
 
     title = re.sub(r"\s*-\s*抖音.*$", "", title.strip())

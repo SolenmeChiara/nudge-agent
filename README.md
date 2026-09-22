@@ -48,7 +48,7 @@ Built for ADHD time-blindness. The agent wakes up every 20-60 minutes, reads you
 |------|------|
 | `nudge_inject.py` | Timer loop: builds context, writes `nudge_context.md` (full) and `nudge_context_lite.md` (fast-changing subset), pokes the tmux CC instance, delivers urgent messages between wakeups, and sends `/compact` on a schedule (see "How it works") |
 | `fetch_context.py` | Pulls Claude.ai conversation list + last 3 messages per conversation via session cookie |
-| `inject_claude.py` | Playwright CDP bridge: types messages into Claude.ai's chat input |
+| `inject_claude.py` | Playwright CDP bridge: types messages into Claude.ai's chat input (pre-checks 9222 tabs via `cdp_precheck` and refuses to connect through an unresponsive one) |
 | `pc_status.py` | PC presence probe: keyboard/mouse idle, foreground window, Chrome tab titles (CDP metadata only) |
 | `x_notif.py` | Watches the X tab title for unread-count growth, renders a notification block |
 | `see_screen.py` | Agent-initiated iPhone screenshot: trigger mail → phone automation screenshots and uploads → agent reads the image |
@@ -69,7 +69,8 @@ Built for ADHD time-blindness. The agent wakes up every 20-60 minutes, reads you
 | `hue_client.py` | Philips Hue Bridge CLI over local LAN (CLIP API v2): on/off, brightness, color, color-temperature control |
 | `switchbot_client.py` | SwitchBot cloud OpenAPI v1.1 CLI: Hub 2 indoor environment (`status`), `devices`, generic `send_command` (curtain); bulb subcommands are legacy |
 | `send_doc.py` | Renders a markdown file to HTML and emails it (with the raw file attached) via SMTP |
-| `grab_video.py` | Downloads a Bilibili / Douyin / Xiaohongshu video into a local cache (Bilibili retries with Chrome cookies on a 412; Douyin tries yt-dlp with the saved cookie file first, then the 9222 Chrome lane; `--speed N` also writes a 540p N× copy) |
+| `grab_video.py` | Downloads a Bilibili / Douyin / Xiaohongshu video into a local cache (Bilibili retries with Chrome cookies on a 412; Douyin tries yt-dlp with the saved cookie file first, then the 9222 Chrome lane; `--speed N` also writes a 540p N× copy). Both 9222 lanes run `cdp_precheck` first and skip the lane when a tab is unresponsive |
+| `cdp_precheck.py` | Health-checks every 9222 tab before anything calls `connect_over_cdp` — one tab whose renderer stopped answering DevTools commands hangs the whole connect. Run it bare to see per-tab status, `--close-dead` to close the offenders |
 
 **Session plumbing**
 
