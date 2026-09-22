@@ -69,7 +69,7 @@ Built for ADHD time-blindness. The agent wakes up every 20-60 minutes, reads you
 | `hue_client.py` | Philips Hue Bridge CLI over local LAN (CLIP API v2): on/off, brightness, color, color-temperature control |
 | `switchbot_client.py` | SwitchBot cloud OpenAPI v1.1 CLI: Hub 2 indoor environment (`status`), `devices`, generic `send_command` (curtain); bulb subcommands are legacy |
 | `send_doc.py` | Renders a markdown file to HTML and emails it (with the raw file attached) via SMTP |
-| `grab_video.py` | Downloads a Bilibili/yt-dlp video into a local cache, auto-retrying with Chrome cookies on a 412 |
+| `grab_video.py` | Downloads a Bilibili / Douyin / Xiaohongshu video into a local cache (Bilibili retries with Chrome cookies on a 412; Douyin tries yt-dlp with the saved cookie file first, then the 9222 Chrome lane; `--speed N` also writes a 540p N× copy) |
 
 **Session plumbing**
 
