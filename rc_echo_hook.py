@@ -481,11 +481,26 @@ def run():
     rows = load_rows(tpath)
     retried = 0
     idx, assistants, prev = -1, [], False
+    catchup = None  # 追赶模式：先补发的旧回合 (提示行, 助手条目)
     while True:
         last, last_assts, trailing = scan_turns(rows)
         if last >= 0 and not handled(rows[last], last_assts, seen_uuid):
-            # 已知取舍：若更早的某个 RC 回合当初发送失败一直没记账，这里会先把它补发出来
-            # （带 +prev），本回合顺延到下一次 Stop。一次 Stop 只发一条，不做补偿队列。
+            # 旧账在手、本回合还挂着（F 落盘慢会卡进每次都发上一条的 off-by-one 稳态）：
+            # 先等本回合落盘，等到了就旧账＋本回合连发补齐，一次自愈；
+            # 等不到再按原样只发旧账（+prev），本回合顺延到下一次 Stop。
+            pending = [t for t in trailing if not handled(rows[t], [], seen_uuid)]
+            if pending and retried < RETRY_TIMES:
+                stale = (rows[last], last_assts)
+                time.sleep(RETRY_WAIT)
+                retried += 1
+                rows = load_rows(tpath)
+                last2, assts2, trail2 = scan_turns(rows)
+                if (last2 >= 0 and not handled(rows[last2], assts2, seen_uuid)
+                        and rows[last2].get("uuid") != stale[0].get("uuid")):
+                    catchup = stale
+                    idx, assistants, prev = last2, assts2, bool(trail2)
+                    break
+                continue
             idx, assistants, prev = last, last_assts, bool(trailing)
             break
         pending = [t for t in trailing if not handled(rows[t], [], seen_uuid)]
@@ -512,6 +527,26 @@ def run():
         return
 
     prompt = rows[idx]
+    if catchup is not None:
+        # 追赶补发：把上一次 Stop 欠下的旧回合先推出去，再推本回合，此后回到同步稳态
+        c_prompt, c_assts = catchup
+        c_chosen, c_text = last_text_entry(c_assts)
+        c_preview = make_preview(c_text) if c_text else ""
+        if c_preview:
+            c_body = {
+                "topic": NTFY_TOPIC,
+                "title": "回了（{}）".format(short_model(c_assts, c_chosen)),
+                "message": c_preview,
+                "tags": ["speech_balloon"],
+                "priority": 4,
+                "click": "claude://",
+            }
+            if os.environ.get("RC_ECHO_DRY_RUN") == "1":
+                sys.stderr.write(json.dumps(c_body, ensure_ascii=False) + "\n")
+                log("dry-run+catchup", c_preview)
+            else:
+                send(c_body)
+                log("sent+catchup", c_preview)
     chosen, text = last_text_entry(assistants)
     if not text:
         # 回复文本可能晚于 Stop 落盘；Stop 钩子入参若带 last_assistant_message 则用它兜底
