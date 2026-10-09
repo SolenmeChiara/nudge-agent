@@ -37,6 +37,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -75,6 +76,12 @@ XHS_HOSTS = ("xhslink.cn", "xhslink.com", "xiaohongshu.com")
 XHS_REFERER = "https://www.xiaohongshu.com/"
 XHS_NOTE = re.compile(r"/(?:explore|discovery/item|item)/([0-9A-Za-z]+)")
 CDP_TIMEOUT = 15000  # 毫秒。真凶是哑页（见 cdp_precheck.py），但也别裸等
+CDP_WAIT = 24  # 秒。抖音页等视频地址出现的上限，出现即走
+# 视频本体的 src、播放器实际选中的 currentSrc、<source> 子元素，三处都读，先读第一个 video
+DOM_SRC_JS = (
+    "() => [...document.querySelectorAll('video')].flatMap(v => [v.currentSrc, v.src,"
+    " ...[...v.querySelectorAll('source')].map(s => s.src)]).filter(Boolean)"
+)
 PROBE_TIMEOUT = 90  # 秒。问元信息的墙钟上限，别让一条挂死的路拖住换路
 
 
@@ -446,6 +453,17 @@ def douyin_ytdlp(ytdlp: str, url: str, stem: str, args) -> tuple[int, Path | Non
     return (0, out) if out else (4, None)
 
 
+def close_target(target_id: str) -> bool:
+    """绕开 playwright，走 9222 的 HTTP 口按编号关掉一页（只关这一页）。"""
+    if not target_id:
+        return False
+    try:
+        with urllib.request.urlopen(f"{CDP}/json/close/{target_id}", timeout=5) as r:
+            return r.status == 200
+    except OSError:
+        return False
+
+
 def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
     """抖音第二条路：连 9222 的 Chrome 捞直链。
 
@@ -457,6 +475,7 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
     返回 (状态码, 文件)：0 成功、3 太长、其他非零表示这条路没走通。
     """
     try:
+        from playwright.sync_api import Error as PWError
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("没装 playwright，Chrome 专线走不了。装：pip install playwright",
@@ -469,8 +488,17 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
         print("Chrome 专线先跳过。", file=sys.stderr)
         return 2, None
 
+    m = re.search(r"/video/(\d+)", url)
+    vid = m.group(1) if m else ""
+
+    def mine(urls: list) -> list:
+        # 推荐区、特效素材也走 zjcdn。本条视频的直链尾巴带 __vid=<作品号>，
+        # 认得出作品号就只认它，免得下成隔壁的推荐视频
+        return [u for u in urls if f"__vid={vid}" in u] if vid else urls
+
     net_urls: list = []
     dom_srcs: list = []
+    body = ""
     title, dur, ua, cookies = "", 0, chrome_ua(), []
     print(f"开 {url} ...")
     try:
@@ -480,7 +508,17 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
                 print("9222 的 Chrome 没有可用的窗口", file=sys.stderr)
                 return 2, None
             ctx = browser.contexts[0]
+            # 被 timeout/kill 发 SIGTERM 时 Python 默认直接退出、不走 finally，
+            # 页就漏在 Chrome 里连播。转成 SystemExit，下面的 finally 才关得到
+            old_term = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
             page = ctx.new_page()
+            target_id = ""
+            try:  # 记下这一页的 CDP 编号：驱动跟着被杀时还能走 HTTP 口关它
+                cdp = ctx.new_cdp_session(page)
+                target_id = cdp.send("Target.getTargetInfo")["targetInfo"]["targetId"]
+                cdp.detach()
+            except PWError:
+                pass
 
             def on_resp(r):
                 u = r.url
@@ -491,23 +529,56 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
             page.on("response", on_resp)
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                time.sleep(8)  # 等播放器起来、真实地址挂进 DOM
-                dom_srcs = page.evaluate(
-                    "() => [...document.querySelectorAll('video, video source')]"
-                    ".map(v => v.src).filter(Boolean)"
-                ) or []
-                dur = page.evaluate(
-                    "() => { const v = document.querySelector('video');"
-                    " return v && isFinite(v.duration) ? v.duration : 0; }"
-                ) or 0
+                # 10/9 实测：同一页有时 8 秒还停在「在抖音记录美好生活」空壳，
+                # 播放器没起来。改成轮询，地址一出现就走；到一半还没有就刷新一次
+                deadline = time.time() + CDP_WAIT
+                reloaded = False
+                while True:
+                    time.sleep(1)
+                    try:
+                        dom_srcs = page.evaluate(DOM_SRC_JS) or []
+                    except PWError:  # 页面正在跳转，上下文换掉了，下一秒再读
+                        dom_srcs = []
+                    if any(u.startswith("http") for u in dom_srcs) or mine(net_urls):
+                        break
+                    left = deadline - time.time()
+                    if left <= 0:
+                        break
+                    if not reloaded and left < CDP_WAIT / 2:
+                        print("页面还没放出视频，刷新一次再等 ...")
+                        page.reload(wait_until="domcontentloaded", timeout=45000)
+                        reloaded = True
+                # 地址一出现就跳出了轮询，播放器这时可能还没读到时长；
+                # 时长是 20 分钟闸门的依据，多给几秒
+                for _ in range(8):
+                    try:
+                        dur = page.evaluate(
+                            "() => { const v = document.querySelector('video');"
+                            " return v && isFinite(v.duration) ? v.duration : 0; }"
+                        ) or 0
+                    except PWError:
+                        dur = 0
+                    if dur or not dom_srcs:
+                        break
+                    time.sleep(0.5)
                 title = page.title() or ""
+                body = page.inner_text("body")[:200]
+                if vid and vid not in page.url:
+                    # 作品没了或被下架时抖音会把人带去别的视频，那页的地址不能要
+                    print(f"页面被带去了别处（{shorten(page.url, 80)}）", file=sys.stderr)
+                    dom_srcs = []
                 ua = page.evaluate("navigator.userAgent") or ua
                 cookies = ctx.cookies(["https://www.douyin.com"])
             finally:
+                signal.signal(signal.SIGTERM, old_term)
                 try:
                     page.close()  # 只关自己开的这一页
                 except Exception:
-                    pass
+                    # 驱动没了（timeout 会连驱动一起杀）就绕开它，按编号直接关。
+                    # 抖音页留着会一直自动连播
+                    if not close_target(target_id):
+                        print("自己开的抖音页没关掉，去 Chrome 手动关一下",
+                              file=sys.stderr)
     except Exception as e:
         # 9/22 查清：HTTP 口回得好好的、connect 却挂死，是某个标签页的渲染进程
         # 不再应答 DevTools 命令（哑页），上面的预检已经拦掉这一种。这里接的是
@@ -528,9 +599,11 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
         return 3, None
 
     # DOM 的 src 是最干净的直链，排前面；blob: 是播放器内部句柄，下不了
-    candidates = [u for u in dom_srcs if u.startswith("http")] + net_urls
+    candidates = [u for u in dom_srcs if u.startswith("http")] + mine(net_urls)
     if not candidates:
         print("DOM 和网络流量里都没捞到视频地址（登录墙？页面没放出来？）", file=sys.stderr)
+        print(f"页面停在：《{title}》 {shorten(' '.join(body.split()), 120)}",
+              file=sys.stderr)
         return 4, None
 
     cookie_args: list = []
