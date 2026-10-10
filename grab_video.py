@@ -22,6 +22,8 @@ yt-dlp 带 ~/.cache/nudge-agent/douyin_cookies.txt 直下 —— 9/22 实测这�
 再从网络流量里捞 douyinvod/zjcdn，拿到就在同一趟里立刻用 curl 下（直链带签名
 时效，存着后用会过期），顺手把新 cookie 写回那个文件喂给下次。--cdp-first
 可以把顺序倒过来。--height 对抖音专线无效（播放器给什么拿什么）。
+长视频是音画分开放的（DASH，<video> 只挂 blob:），专线改从页面的
+window.player 配置里按作品号取画面、音轨两条地址，各下一份再用 ffmpeg 合成 mp4。
 
 小红书（xhslink.cn 短链、xiaohongshu.com/explore/ 或 /discovery/item/ 页）
 交给 yt-dlp 直下，不用 cookie。短链展开后 query 里的 xsec_token / xsec_source
@@ -82,6 +84,23 @@ DOM_SRC_JS = (
     "() => [...document.querySelectorAll('video')].flatMap(v => [v.currentSrc, v.src,"
     " ...[...v.querySelectorAll('source')].map(s => s.src)]).filter(Boolean)"
 )
+# 长视频走 DASH（音视频分两条、<video> 只挂 blob:），直链只能从播放器配置里拿。
+# 10/9 实测 window.player.config 带作品号 vid、时长和整套清晰度：curDefinition 是
+# 正在放的那档画面，definition.list 里挂着 audioDefinition。vid 对不上就不认
+PLAYER_JS = r"""(vid) => {
+  const P = window.player, c = P && P.config;
+  if (!c || (vid && String(c.vid) !== vid)) return null;
+  const urls = d => d ? [...(d.url || []).map(u => u && u.src),
+                         d.main_url, d.backup_url_1].filter(Boolean) : [];
+  const defs = (c.definition && c.definition.list) || [];
+  const cur = P.curDefinition;
+  const vdef = (cur && (!vid || String(cur.vid) === vid)) ? cur : defs[0];
+  const adef = (vdef && vdef.audioDefinition)
+    || (defs.find(d => d && d.audioDefinition) || {}).audioDefinition;
+  return {vid: String(c.vid || ''), duration: c.duration || 0,
+          dash: !!(vdef && String(vdef.vtype || vdef.format).toUpperCase() === 'DASH'),
+          video: urls(vdef), audio: urls(adef)};
+}"""
 PROBE_TIMEOUT = 90  # 秒。问元信息的墙钟上限，别让一条挂死的路拖住换路
 
 
@@ -498,6 +517,8 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
 
     net_urls: list = []
     dom_srcs: list = []
+    dash: dict = {}  # 播放器配置里读到的本作品 DASH 地址（长视频）
+    moved = False  # 页面被带离本作品了没有
     body = ""
     title, dur, ua, cookies = "", 0, chrome_ua(), []
     print(f"开 {url} ...")
@@ -541,6 +562,14 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
                         dom_srcs = []
                     if any(u.startswith("http") for u in dom_srcs) or mine(net_urls):
                         break
+                    # 长视频的 <video> 只挂 blob:，单文件地址永远等不来；
+                    # 播放器配置里有本作品的画面＋音轨两条地址就够了
+                    try:
+                        dash = page.evaluate(PLAYER_JS, vid) or {}
+                    except PWError:
+                        dash = {}
+                    if dash.get("dash") and dash.get("video") and dash.get("audio"):
+                        break
                     left = deadline - time.time()
                     if left <= 0:
                         break
@@ -566,7 +595,7 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
                 if vid and vid not in page.url:
                     # 作品没了或被下架时抖音会把人带去别的视频，那页的地址不能要
                     print(f"页面被带去了别处（{shorten(page.url, 80)}）", file=sys.stderr)
-                    dom_srcs = []
+                    dom_srcs, dash, moved = [], {}, True
                 ua = page.evaluate("navigator.userAgent") or ua
                 cookies = ctx.cookies(["https://www.douyin.com"])
             finally:
@@ -591,7 +620,7 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
     title = re.sub(r"\s*-\s*抖音.*$", "", title.strip())
     if title:
         print(f"《{title}》")
-    dur = int(dur)
+    dur = int(dur or dash.get("duration") or 0)  # <video> 没读到就用播放器配置的
     if dur:
         print(f"时长：{dur // 60}:{dur % 60:02d}")
     if dur > MAX_MIN * 60 and not args.force:
@@ -600,7 +629,8 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
 
     # DOM 的 src 是最干净的直链，排前面；blob: 是播放器内部句柄，下不了
     candidates = [u for u in dom_srcs if u.startswith("http")] + mine(net_urls)
-    if not candidates:
+    pair = dash_pair(dash, [] if moved else net_urls) if not candidates else None
+    if not candidates and not pair:
         print("DOM 和网络流量里都没捞到视频地址（登录墙？页面没放出来？）", file=sys.stderr)
         print(f"页面停在：《{title}》 {shorten(' '.join(body.split()), 120)}",
               file=sys.stderr)
@@ -612,6 +642,8 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
         cookie_args = ["-b", str(DOUYIN_COOKIE_FILE)]
 
     out = CACHE / f"{stem}.mp4"
+    if pair:
+        return douyin_dash(pair, out, ua, cookie_args)
     for cand in dict.fromkeys(candidates):  # 去重保序
         print(f"\n下 {cand[:110]} ...")
         proc = run([
@@ -624,6 +656,70 @@ def douyin_cdp(url: str, stem: str, args) -> tuple[int, Path | None]:
         out.unlink(missing_ok=True)
     print("候选地址都没下成。", file=sys.stderr)
     return 4, None
+
+
+def dash_pair(dash: dict, net_urls: list) -> tuple[list, list] | None:
+    """长视频的画面、音轨两组候选地址。先信播放器配置，没有再翻网络流量。
+
+    网络流量里的 media-video / media-audio 不带作品号，认不出归属，只能按出现
+    先后取最早的一对：页面一打开先放的是本作品，推荐区的预加载在后面。
+    """
+    if dash.get("dash") and dash.get("video") and dash.get("audio"):
+        print("长视频，音画分开放的（DASH），按播放器配置下两条再合。")
+        return dash["video"], dash["audio"]
+    vids = [u for u in net_urls if "/media-video" in u]
+    auds = [u for u in net_urls if "/media-audio" in u]
+    if vids and auds:
+        print("播放器配置没读到，退回网络流量里最早的一对音画（认不出作品号，可能不准）。")
+        return vids[:1], auds[:1]
+    return None
+
+
+def douyin_dash(pair: tuple[list, list], out: Path, ua: str,
+                cookie_args: list) -> tuple[int, Path | None]:
+    """画面、音轨各下一条，ffmpeg 原样拼成 mp4；拼不上再转码。"""
+    if not shutil.which("ffmpeg"):
+        print("找不到 ffmpeg，音画分开的视频合不了。装：sudo apt install ffmpeg",
+              file=sys.stderr)
+        return 4, None
+    # 尾巴必须是 .part：cached() 认 .part 是残骸，中途断了也不会被当成品
+    parts = {"画面": out.with_name(f"{out.stem}.video.part"),
+             "音轨": out.with_name(f"{out.stem}.audio.part")}
+    try:
+        for (label, dst), cands in zip(parts.items(), pair):
+            for cand in dict.fromkeys(cands):
+                print(f"\n下{label} {cand[:110]} ...")
+                proc = run([
+                    "curl", "-fSL", "--retry", "2", "-o", str(dst),
+                    "-A", ua, "-e", DOUYIN_REFERER, *cookie_args, cand,
+                ])
+                if proc.returncode == 0 and dst.exists() and dst.stat().st_size > 100_000:
+                    break
+                dst.unlink(missing_ok=True)
+            else:
+                print(f"{label}的候选地址都没下成。", file=sys.stderr)
+                return 4, None
+
+        print("\n合音画 ...")
+        head = ["ffmpeg", "-y", "-loglevel", "error",
+                "-i", str(parts["画面"]), "-i", str(parts["音轨"]),
+                "-map", "0:v:0", "-map", "1:a:0"]
+        tail = ["-movflags", "+faststart", str(out)]
+        proc = run(head + ["-c", "copy"] + tail, capture_output=True)
+        if proc.returncode != 0 or not out.exists():
+            # HEVC 原样装 mp4 一般没事；真不行就转码，慢但稳
+            print("原样合没成，改转码合（慢一些）...", file=sys.stderr)
+            proc = run(head + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                               "-c:a", "aac", "-b:a", "128k"] + tail,
+                       capture_output=True)
+        if proc.returncode != 0 or not out.exists():
+            print("音画没合上：", (proc.stderr or "").strip()[-400:], file=sys.stderr)
+            out.unlink(missing_ok=True)
+            return 4, None
+        return 0, out
+    finally:
+        for f in parts.values():
+            f.unlink(missing_ok=True)
 
 
 def douyin_grab(url: str, args, ytdlp: str) -> int:
